@@ -28,8 +28,12 @@ def main() -> None:
     eng = Engine(cfg, db, make_broker(cfg, db), tg)
     register_commands(tg, eng, cfg)
 
+    if not cfg.telegram_token:
+        log.warning("TELEGRAM_TOKEN girilmemiş (Settings > Secrets > Actions). Bekliyorum.")
+        return
+
     # Chat id girilmemişse: bota ilk /start yazan sahip olur
-    if cfg.telegram_token and not chat_id:
+    if not chat_id:
         import requests
 
         r = requests.get(f"{tg.base}/getUpdates", params={"timeout": 0}, timeout=30).json()
