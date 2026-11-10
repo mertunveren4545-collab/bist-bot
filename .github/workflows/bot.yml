@@ -4,7 +4,17 @@ on:
   schedule:
     # Hafta içi her 15 dakikada bir, 09:00-18:59 İstanbul saati (UTC 06-15)
     - cron: "*/15 6-15 * * 1-5"
-  workflow_dispatch: {}   # Actions sekmesinden elle "Run workflow" ile de çalışır
+  workflow_dispatch:      # Actions sekmesinden elle "Run workflow" ile de çalışır
+    inputs:
+      gorev:
+        description: "otomatik = saate göre normal çalışma, deneme = şimdi deneme sabah planı gönder"
+        default: otomatik
+        type: choice
+        options: [otomatik, deneme]
+      nakit:
+        description: "İstersen Midas serbest bakiyeni yaz (ör. 53000)"
+        required: false
+        default: ""
 
 concurrency:
   group: bist-bot
@@ -32,6 +42,8 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN || secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN_ }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOREV: ${{ github.event.inputs.gorev || 'otomatik' }}
+          NAKIT: ${{ github.event.inputs.nakit || '' }}
         run: python run_once.py
 
       - name: Durumu kaydet

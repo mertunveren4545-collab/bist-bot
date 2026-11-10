@@ -59,6 +59,25 @@ def main() -> None:
     # 1) Telegram mesajları ve butonlar
     db.set("tg_offset", tg.poll_once(int(db.get("tg_offset", 0))))
 
+    # Elle tetiklenen ayarlar
+    import os
+
+    if os.getenv("NAKIT", "").strip():
+        amount = float(os.getenv("NAKIT").replace(".", "").replace(",", "."))
+        db.set("cash", amount)
+        log.info("Nakit %.0f olarak ayarlandı", amount)
+    if os.getenv("GOREV") == "deneme":
+        log.info("Deneme sabah planı")
+        tg.send("🧪 <b>DENEME</b> — yarın sabah gelecek planın örneği bu. "
+                "Bugünün kapanış fiyatlarıyla hesaplandı, butonlara BASMA.")
+        before = {p["id"] for p in db.open_pendings()}
+        eng.morning()
+        for p in db.open_pendings():
+            if p["id"] not in before:
+                db.set_pending_status(p["id"], "EXPIRED")
+        db.set(f"done_m:{now().date().isoformat()}", True)
+        return
+
     # 2) Zamanlanmış işler
     t = now()
     if not is_trading_day(cfg, t):
