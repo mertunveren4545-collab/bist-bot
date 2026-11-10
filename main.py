@@ -163,6 +163,7 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
             return f"Kayıtlı nakit: {tl(eng.cash())}. Değiştirmek için: /nakit 50000"
         amount = float(args[0].replace(".", "").replace(",", "."))
         eng.db.set("cash", amount)
+        eng.db.set(eng._day_key(), amount)
         return f"💰 Nakit {tl(amount)} olarak kaydedildi. Lotları buna göre hesaplayacağım."
 
     @tg.command("aldim")

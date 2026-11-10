@@ -65,10 +65,15 @@ def main() -> None:
     if os.getenv("NAKIT", "").strip():
         amount = float(os.getenv("NAKIT").replace(".", "").replace(",", "."))
         db.set("cash", amount)
+        db.set(eng._day_key(), amount)
         log.info("Nakit %.0f olarak ayarlandı", amount)
     if os.getenv("GOREV") == "deneme":
         log.info("Deneme sabah planı")
-        tg.send("🧪 <b>DENEME</b> — yarın sabah gelecek planın örneği bu. "
+        if not eng.market_is_ok():
+            tg.send("🧪 Not: BIST 100 şu an 50 günlük ortalamasının altında, yani gerçek planda "
+                    "bot alım önermezdi. Mesajın nasıl görüneceğini görmen için bu denemede filtreyi kapattım.")
+            cfg.raw["use_market_filter"] = False
+        tg.send("🧪 <b>DENEME</b> — sabah gelecek planın örneği bu. "
                 "Bugünün kapanış fiyatlarıyla hesaplandı, butonlara BASMA.")
         before = {p["id"] for p in db.open_pendings()}
         eng.morning()
