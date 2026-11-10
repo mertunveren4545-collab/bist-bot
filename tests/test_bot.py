@@ -196,6 +196,7 @@ def test_no_heartbeat_when_signal(cfg, tmp_path):
 
 def plan_engine(cfg, tmp_path, n_up=4, names=None):
     cfg.raw["daily_plan"] = True
+    cfg.raw["trade_style"] = "swing"
     cfg.raw["max_new_per_day"] = 2
     cfg.raw["send_every_check"] = False
     cfg.raw["strategy"]["buy_threshold"] = 1
@@ -253,24 +254,55 @@ def test_telegram_claim_chat():
     assert tg.chat_id == "555" and tg.enabled
 
 
-def test_daytrade_levels_and_close(cfg, tmp_path, monkeypatch):
+GUN = {"target_tl": 650, "stop_ratio": 0.8, "min_target_pct": 0.6, "max_target_pct": 2.0,
+       "range_multiple": 0.1, "max_concurrent": 1, "max_trades_per_day": 3, "reentry_until": "23:59",
+       "cash_buffer_pct": 0.5, "stop_pct": 1.0, "trail_pct": 1.5, "close_at": "23:59"}
+
+
+def test_daytrade_levels_and_close(cfg, tmp_path):
     eng, db, tg, prices = plan_engine(cfg, tmp_path)
     cfg.raw["trade_style"] = "gunici"
-    cfg.raw["gunici"] = {"stop_pct": 1.5, "target_pct": 2.5, "trail_pct": 1.5, "close_at": "00:00"}
-    msg = eng.manual_buy("UP0", 100, 100.0)
+    cfg.raw["gunici"] = dict(GUN, close_at="00:00")
+    eng.manual_buy("UP0", 500, 100.0)
     pos = db.position("UP0")
-    assert pos["stop"] == pytest.approx(98.5, abs=0.06) and pos["target"] == pytest.approx(102.5, abs=0.06)
-    prices["UP0"] = 100.5  # ne stop ne hedef; ama kapanış saati geçti
+    assert pos["target"] == pytest.approx(101.3) and pos["stop"] == pytest.approx(98.9)
+    assert (pos["target"] - 100) * 500 >= 649.9
+    prices["UP0"] = 100.5
     eng.intraday()
     sells = [p for p in db.open_pendings() if p["side"] == "SELL"]
     assert sells and "Gün sonu" in sells[0]["reason"]
+
+
+def test_daytrade_full_day_with_reentry(cfg, tmp_path):
+    eng, db, tg, prices = plan_engine(cfg, tmp_path)
+    cfg.raw["trade_style"] = "gunici"
+    cfg.raw["gunici"] = dict(GUN)
+    db.set("cash", 53000)
+    eng.morning()
+    buys = [p for p in db.open_pendings() if p["side"] == "BUY"]
+    assert len(buys) == 1  # tüm parayla tek hisse
+    b = buys[0]
+    assert b["qty"] * b["price"] <= 53000 and b["qty"] * b["price"] > 52000
+    assert 640 <= (b["target"] - b["price"]) * b["qty"] <= 760
+    eng.confirm_pending(b["id"], 1)
+    assert "LİMİT SATIŞ" in tg.edits[-1][1]
+    # hedef geldi -> sat sinyali
+    prices[b["symbol"]] = b["target"] + 0.1
+    eng.intraday()
+    sell = [p for p in db.open_pendings() if p["side"] == "SELL"][0]
+    eng.confirm_pending(sell["id"], 2)
+    assert db.position(b["symbol"]) is None and eng.cash() > 53000
+    # bir sonraki kontrolde yeni hisse önerilir (farklı bir hisse)
+    eng.intraday()
+    new = [p for p in db.open_pendings() if p["side"] == "BUY"]
+    assert len(new) == 1 and new[0]["symbol"] != b["symbol"]
 
 
 def test_text_messages(cfg, tmp_path):
     import main as m
     eng, db, tg, prices = plan_engine(cfg, tmp_path, names=["ALARK", "GARAN"])
     cfg.raw["trade_style"] = "gunici"
-    cfg.raw["gunici"] = {"stop_pct": 1.5, "target_pct": 2.5, "trail_pct": 1.5, "close_at": "23:59"}
+    cfg.raw["gunici"] = dict(GUN)
     real = Telegram("", "1")
     m.register_commands(real, eng, cfg)
     p0 = prices["ALARK"]

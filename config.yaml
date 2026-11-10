@@ -18,9 +18,17 @@ max_new_per_day: 2
 #   swing  -> birkaç gün/hafta tut (ATR'ye göre stop/hedef)
 trade_style: gunici
 gunici:
-  stop_pct: 1.5        # alış fiyatının %1,5 altı zarar kes
-  target_pct: 2.5      # alış fiyatının %2,5 üstü kâr al
-  trail_pct: 1.5       # fiyat yükseldikçe stop, zirvenin %1,5 altına taşınır
+  target_tl: 650          # her işlemde hedef net kâr (TL). 53.000 TL'de ≈ %1,2
+  stop_ratio: 0.8         # zarar kes = hedef yüzdesinin 0,8 katı (≈ -520 TL)
+  min_target_pct: 0.6     # hedef yüzdesi bu aralıkta tutulur
+  max_target_pct: 2.0
+  range_multiple: 2.5     # hisse son 20 günde ortalama, hedefin en az 2,5 katı gün içi oynamalı
+  max_concurrent: 1       # aynı anda kaç hisse (tüm parayla 1 hisse)
+  max_trades_per_day: 3   # günde en fazla kaç hisse alınır (satılan yerine yenisi dahil)
+  reentry_until: "16:00"  # bu saatten sonra yeni hisse önerilmez
+  cash_buffer_pct: 0.5    # küsurat için nakitte bırakılacak pay
+  stop_pct: 1.0           # (iz süren stop hesabı için)
+  trail_pct: 1.5
   close_at: "17:30"    # bu saatte elde kalan her şey için SAT uyarısı
 
 # Her 15 dk'lık kontrolde, al/sat sinyali çıkmasa bile kısa bir durum mesajı gönder

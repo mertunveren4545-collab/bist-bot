@@ -7,11 +7,12 @@ alım/satım kararı verir ve her şeyi Telegram'dan sana bildirir.
 
 | Saat (İstanbul) | Ne gelir |
 |---|---|
-| ~10:20 | ☀️ **Sabah planı (günlük al-sat):** piyasa durumu, en güçlü 5 hisse ve **bugün alınacak en fazla 2 hisse** (lot, fiyat, zarar kes, kâr al). Her birinin altında **✅ Midas'ta aldım / ❌ Geç** butonu. |
-| 10:00 – 17:30 | Her 10 dk'da bir **sadece elindeki hisseler** kontrol edilir: kâr al (+%2,5), zarar kes (−%1,5), iz süren stop olursa **🔴 SAT**. Gün içinde **yeni alım önerilmez.** |
+| ~10:20 | ☀️ **Sabah planı (günlük al-sat):** piyasa durumu, en güçlü 5 hisse ve **tüm parayla alınacak 1 hisse**. Hedef: işlem başına ≈ 650 ₺ kâr (53.000 ₺'de ≈ %1,2), zarar kes ≈ 520 ₺. Her birinin altında **✅ Midas'ta aldım / ❌ Geç** butonu. |
+| 10:00 – 17:30 | Her 10 dk'da bir **sadece elindeki hisseler** kontrol edilir: hedef ya da zarar kes gelirse **🔴 SAT**. Hedefin %60'ına gelince zarar kes alış fiyatına çekilir. Satıştan sonra 16:00'ya kadar **yeni hisse önerilir** (günde en fazla 3). |
 | 17:30 | Elde kalan her hisse için **🔴 SAT** — günlük al-satta ertesi güne taşınmaz. |
 | ~18:20 | 🌙 Gün sonu raporu |
 
+- **En önemli ipucu:** Aldıktan hemen sonra Midas'ta hedef fiyattan **limit satış emri** gir. Fiyat gelince Midas anında satar, botun 10 dakikalık kontrolünü beklemezsin.
 - **Normal yazıyla konuşabilirsin:**
   - `ALARK aldım 53 bin` → lotu hesaplar, takibe alır, kâr al / zarar kes seviyelerini yazar
   - `THYAO 100 lot aldım 285,50` → fiyatı ve lotu sen verirsin

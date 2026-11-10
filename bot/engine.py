@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 from html import escape
 
 from . import data as market
 from .news import NewsEngine
-from .risk import exit_reason, position_plan, round_tick, trail_stop
+from .risk import Plan, exit_reason, position_plan, round_tick, tick, trail_stop
 from .storage import Storage, now
 from .strategy import Score, market_ok, score_symbol
 
@@ -93,6 +94,33 @@ class Engine:
         r = dict(self.cfg.risk, stop_loss_atr=1.0, take_profit_atr=tp / sp, trailing_stop_atr=tr / sp)
         return price * sp / 100, r
 
+    def day_levels(self, price: float, qty: int) -> tuple[float, float, float]:
+        """Günlük al-sat: hedef TL kâra göre kâr al / zarar kes. (stop, target, hedef_yüzde)"""
+        g = self.cfg.raw.get("gunici", {})
+        value = max(1.0, price * qty)
+        if g.get("target_tl"):
+            tp = g["target_tl"] / value * 100
+        else:
+            tp = g.get("target_pct", 1.2)
+        tp = max(g.get("min_target_pct", 0.6), min(tp, g.get("max_target_pct", 2.0)))
+        sp = tp * g.get("stop_ratio", 0.8)
+        t = tick(price)
+        target = math.ceil(price * (1 + tp / 100) / t) * t
+        stop = math.floor(price * (1 - sp / 100) / t) * t
+        return round(stop, 2), round(target, 2), tp
+
+    def avg_range_pct(self, symbol: str) -> float:
+        """Son 20 günde günlük ortalama (en yüksek - en düşük) / açılış, %."""
+        df = self.daily_fn(symbol)
+        if df is None or len(df) < 21:
+            return 0.0
+        d = df.iloc[-21:-1]
+        return float(((d["High"] - d["Low"]) / d["Open"]).mean() * 100)
+
+    def reachable(self, symbol: str, target_pct: float) -> bool:
+        need = self.cfg.raw.get("gunici", {}).get("range_multiple", 2.5)
+        return self.avg_range_pct(symbol) >= target_pct * need
+
     def close_time_reached(self) -> bool:
         if not self.daytrade:
             return False
@@ -162,8 +190,21 @@ class Engine:
         if not ok:
             return why
         eq = self.equity()
-        a, r = self._eff(sc.price, sc.atr)
-        plan = position_plan(sc.price, a, eq, self.free_cash(), r)
+        if self.daytrade:
+            g = self.cfg.raw.get("gunici", {})
+            slots = max(1, g.get("max_concurrent", 1) - len(self.db.positions())
+                        - sum(1 for p in self.db.open_pendings() if p["side"] == "BUY"))
+            budget = self.free_cash() * (1 - g.get("cash_buffer_pct", 0.5) / 100) / slots
+            qty = int(budget // sc.price)
+            plan = None
+            if qty >= 1:
+                stop, target, tp = self.day_levels(sc.price, qty)
+                if not self.reachable(sc.symbol, tp):
+                    return f"{sc.symbol}: günlük hareketi hedef için yetersiz"
+                plan = Plan(qty, stop, target, round(qty * sc.price, 2))
+        else:
+            a, r = self._eff(sc.price, sc.atr)
+            plan = position_plan(sc.price, a, eq, self.free_cash(), r)
         if not plan:
             return f"{sc.symbol}: yeterli nakit/lot yok"
         reason = f"Puan {sc.total:.0f} — {'; '.join(sc.notes) or sc.summary()}"
@@ -213,10 +254,15 @@ class Engine:
         self.db.set_pending_status(pid, "DONE")
         self.record_fill(p["side"], p["symbol"], p["qty"], p["price"], p["stop"], p["target"], p["reason"])
         word = "ALINDI" if p["side"] == "BUY" else "SATILDI"
+        txt = (f"✅ <b>{p['symbol']}</b> {p['qty']} lot @ {tl(p['price'])} {word} "
+               f"(kayıt no {pid}).\nFarklı fiyattan dolduysa: /fiyat {pid} YENİ_FİYAT")
+        if p["side"] == "BUY":
+            txt += self.limit_hint(p["symbol"], p["qty"], p["target"])
+        elif self.daytrade:
+            txt += "\n🔁 Uygun hisse çıkarsa birkaç dakika içinde yenisini önereceğim."
         if message_id:
-            self.tg.edit(message_id, f"✅ <b>{p['symbol']}</b> {p['qty']} lot @ {tl(p['price'])} {word} "
-                                     f"(kayıt no {pid}).\nFarklı fiyattan dolduysa: /fiyat {pid} YENİ_FİYAT")
-        return f"{p['symbol']} kaydedildi"
+            self.tg.edit(message_id, txt)
+        return txt
 
     def reject_pending(self, pid: int, message_id: int | None = None) -> str:
         p = self.db.pending(pid)
@@ -255,12 +301,23 @@ class Engine:
         df = self.daily_fn(symbol)
         sc = score_symbol(symbol, df, self.news_scores.get(symbol, 0.0), self.cfg.strategy) if df is not None else None
         atr_val = sc.atr if sc else price * 0.03
-        a, r = self._eff(price, atr_val)
-        stop = round_tick(price - r["stop_loss_atr"] * a)
-        target = round_tick(price + r["take_profit_atr"] * a)
-        self.record_fill("BUY", symbol, qty, price, stop, target, "Manuel alım (/aldim)")
-        return (f"✅ {symbol} {qty} lot @ {tl(price)} takibe alındı.\n"
-                f"Zarar kes {tl(stop)} | Kâr al {tl(target)}")
+        if self.daytrade:
+            stop, target = self.day_levels(price, qty)[:2]
+        else:
+            a, r = self._eff(price, atr_val)
+            stop = round_tick(price - r["stop_loss_atr"] * a)
+            target = round_tick(price + r["take_profit_atr"] * a)
+        self.record_fill("BUY", symbol, qty, price, stop, target, "Manuel alım")
+        return (f"✅ <b>{symbol}</b> {qty} lot @ {tl(price)} takibe alındı.\n"
+                f"🎯 Kâr al: <b>{tl(target)}</b> (≈ +{tl((target - price) * qty)})\n"
+                f"🛑 Zarar kes: {tl(stop)} (≈ −{tl((price - stop) * qty)})"
+                + self.limit_hint(symbol, qty, target))
+
+    def limit_hint(self, symbol: str, qty: int, target: float) -> str:
+        if not self.daytrade:
+            return ""
+        return (f"\n\n👉 <b>Şimdi Midas'ta LİMİT SATIŞ gir:</b> {symbol} → Sat → Limit {tl(target)} → {qty} adet. "
+                "Fiyat gelince Midas anında satar, botu beklemen gerekmez. Satılınca bana 'sattım' yaz.")
 
     def manual_sell(self, symbol: str, price: float) -> str:
         pos = self.db.position(symbol)
@@ -307,6 +364,8 @@ class Engine:
         # ---- Günlük plan: bugünün alımları sadece burada belirlenir ----
         buys = [s for s in scores if s.total >= th and not self.db.position(s.symbol)]
         max_new = int(self.cfg.raw.get("max_new_per_day", 2))
+        if self.daytrade:
+            max_new = int(self.cfg.raw.get("gunici", {}).get("max_concurrent", 1))
         ok, why = self.can_open_new()
         if not self.market_is_ok():
             lines += ["", "📌 <b>Bugün alım yok</b> — endeks zayıf. Sadece elindekileri takip ediyorum."]
@@ -320,9 +379,15 @@ class Engine:
             lines += ["", f"📌 <b>Bugünün alım planı: {min(len(buys), max_new)} hisse</b> (aşağıda). "
                           "Gün içinde başka alım önermeyeceğim, sadece satış uyarısı gelir."]
         self.tg.send("\n".join(lines))
-        for sc in buys[:max_new]:
+        self.db.set(f"morning_done:{now().date().isoformat()}", True)
+        sent = 0
+        for sc in buys:
+            if sent >= max_new:
+                break
             msg = self.try_buy(sc)
-            if msg and ("limit" in msg or "durduruldu" in msg or "Maksimum" in msg):
+            if not msg:
+                sent += 1
+            elif "limit" in msg or "durduruldu" in msg or "Maksimum" in msg:
                 break
 
     def intraday(self, allow_buys: bool = True) -> None:
@@ -370,6 +435,12 @@ class Engine:
             sc = self.scores.get(pos["symbol"])
             if self.daytrade:
                 atr_val, r = self._eff(pos["entry_price"], 0)
+                be = pos["entry_price"] + 0.6 * (pos["target"] - pos["entry_price"])
+                if price >= be and pos["stop"] < pos["entry_price"]:
+                    self.db.update_stop(pos["symbol"], pos["entry_price"], max(pos["highest"], price))
+                    pos = {**pos, "stop": pos["entry_price"]}
+                    self.tg.send(f"🔒 {pos['symbol']} hedefe yaklaştı, zarar kes alış fiyatına "
+                                 f"({tl(pos['entry_price'])}) çekildi. Artık zarar etmeden çıkabilirsin.", silent=True)
             else:
                 r = self.cfg.risk
                 atr_val = sc.atr if sc else (pos["entry_price"] - pos["stop"]) / r["stop_loss_atr"]
@@ -379,7 +450,7 @@ class Engine:
                 pos = {**pos, "stop": new_stop, "highest": highest}
             days = (now() - datetime.fromisoformat(pos["opened_at"])).days
             if self.daytrade:
-                why = exit_reason(pos, price, None, 0, r, -1)
+                why = exit_reason(pos, price, None, 0, {**r, "max_holding_days": 10**6}, -1)
                 force = False
                 if not why and self.close_time_reached():
                     why, force = "Gün sonu — günlük al-satta pozisyon ertesi güne taşınmaz", True
@@ -390,6 +461,10 @@ class Engine:
                               self.cfg.strategy["sell_threshold"])
             if why:
                 self.sell(pos, price, why)
+        # 2) Günlük al-sat: satılan hissenin yerine yeni hisse
+        if self.daytrade and self.plan_mode:
+            self.day_reentry()
+            return
         # 2) Girişler
         if not allow_buys or not self.market_is_ok():
             return
@@ -400,6 +475,35 @@ class Engine:
             msg = self.try_buy(sc)
             if msg and ("limit" in msg or "durduruldu" in msg or "Maksimum" in msg):
                 break
+
+    def day_reentry(self) -> None:
+        g = self.cfg.raw.get("gunici", {})
+        h, m = map(int, g.get("reentry_until", "16:00").split(":"))
+        t = now()
+        if t >= t.replace(hour=h, minute=m, second=0, microsecond=0) or self.close_time_reached():
+            return
+        if not self.db.get(f"morning_done:{t.date().isoformat()}"):
+            return
+        busy = len(self.db.positions()) + sum(1 for p in self.db.open_pendings() if p["side"] == "BUY")
+        if busy >= g.get("max_concurrent", 1):
+            return
+        bought_today = {x["symbol"] for x in self.db.trades_today() if x["side"] == "BUY"}
+        buys_today = len(bought_today)
+        if buys_today >= g.get("max_trades_per_day", 3) or not buys_today:
+            return  # sabah hiç alım yapılmadıysa gün içinde de başlatma
+        if not self.market_is_ok():
+            return
+        scores = self.scan(refresh_news=True)
+        th = self.cfg.strategy["buy_threshold"]
+        for sc in scores:
+            if sc.total < th:
+                break
+            if sc.symbol in bought_today:
+                continue
+            self.tg.send("🔁 Önceki hisse satıldı, sıradaki fırsat:")
+            msg = self.try_buy(sc)
+            if not msg:
+                return
 
     def eod(self) -> None:
         trades = self.db.trades_today()
@@ -441,7 +545,8 @@ class Engine:
         head = "🟢 <b>ALINDI</b>" if filled else "🟢 <b>AL SİNYALİ — Midas'ta gir</b>"
         txt = (f"{head}: <b>{sc.symbol}</b>\n"
                f"Lot: <b>{plan.qty}</b> | Fiyat: <b>{tl(price)}</b> | Tutar: {tl(plan.qty * price)}\n"
-               f"Zarar kes: {tl(plan.stop)} | Kâr al: {tl(plan.target)}\n"
+               f"🎯 Kâr al: <b>{tl(plan.target)}</b> (≈ +{tl((plan.target - price) * plan.qty)})\n"
+               f"🛑 Zarar kes: {tl(plan.stop)} (≈ −{tl((price - plan.stop) * plan.qty)})\n"
                f"Puan: {sc.total:.0f}/100 ({sc.summary()})")
         if sc.notes:
             txt += "\n• " + "\n• ".join(escape(n) for n in sc.notes)
