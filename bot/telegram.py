@@ -22,6 +22,7 @@ class Telegram:
         self.enabled = bool(token and chat_id)
         self.commands: dict[str, Callable[[list[str]], str | None]] = {}
         self.callbacks: dict[str, Callable[[str, int], str | None]] = {}
+        self.text_handler: Callable[[str], str | None] | None = None
         self._offset = 0
         self._stop = threading.Event()
 
@@ -92,7 +93,16 @@ class Telegram:
         if str(msg.get("chat", {}).get("id")) != self.chat_id:
             return
         text = (msg.get("text") or "").strip()
+        if not text:
+            return
         if not text.startswith("/"):
+            try:
+                reply = self.text_handler(text) if self.text_handler else None
+            except Exception as e:
+                log.exception("Mesaj işlenemedi")
+                reply = f"⚠️ Hata: {e}"
+            if reply:
+                self.send(reply)
             return
         parts = text.split()
         name = parts[0][1:].split("@")[0].lower()

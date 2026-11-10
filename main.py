@@ -188,6 +188,59 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
         eng.set_paused(False)
         return "▶️ Bot tekrar alım yapabilir."
 
+    from bot.textparse import parse
+
+    def _text(text: str):
+        q = parse(text, cfg.universe)
+        sym = q["symbol"]
+        # "aldım" / "sattım" tek başına: bekleyen tek sinyali onayla
+        if q["action"] and not sym:
+            pend = [p for p in eng.db.open_pendings() if p["side"] == q["action"]]
+            if len(pend) == 1:
+                return eng.confirm_pending(pend[0]["id"], pend[0]["message_id"])
+            return "Hangi hisse? Örnek: <code>ALARK aldım 53 bin</code> veya <code>ALARK sattım 107,30</code>"
+        if not sym:
+            return ("Anlayamadım 🙂 Şöyle yazabilirsin:\n"
+                    "• <code>ALARK aldım 53 bin</code>\n• <code>THYAO 100 lot aldım 285,50</code>\n"
+                    "• <code>ALARK sattım 107,30</code>\n• <code>ALARK</code> (durum/hedef sorar)\n"
+                    "Tüm komutlar: /yardim")
+        price = q["price"] or eng.prices_fn([sym]).get(sym)
+        if q["action"] == "BUY":
+            if not price:
+                return f"{sym} fiyatı bulunamadı, fiyatı da yaz: <code>{sym} aldım 100 lot 25,40</code>"
+            # bekleyen sinyal varsa onu onayla
+            for p in eng.db.open_pendings():
+                if p["symbol"] == sym and p["side"] == "BUY":
+                    eng.db._exec("UPDATE pending SET price=?, qty=COALESCE(?, qty) WHERE id=?",
+                                 (price, q["qty"], p["id"]))
+                    return eng.confirm_pending(p["id"], p["message_id"])
+            qty = q["qty"] or (int(q["amount"] // price) if q["amount"] else None)
+            if not qty:
+                return f"Kaç lot aldın? Örnek: <code>{sym} aldım 500 lot {price:.2f}</code> veya <code>{sym} aldım 50 bin</code>"
+            if eng.db.position(sym):
+                return f"{sym} zaten takipte. Yeni alımı eklemek için önce <code>{sym} sattım</code> yaz."
+            note = "" if q["price"] else f"\n(Fiyat yazmadığın için son fiyatı {tl(price)} aldım; farklıysa: <code>{sym} sattım</code> deyip tekrar gir.)"
+            return eng.manual_buy(sym, qty, price) + daytrade_note() + note
+        if q["action"] == "SELL":
+            if not price:
+                return f"Satış fiyatını da yaz: <code>{sym} sattım 107,30</code>"
+            return eng.manual_sell(sym, price)
+        # sadece hisse adı / soru: durum bilgisi
+        pos = eng.db.position(sym)
+        if pos:
+            px = price or pos["entry_price"]
+            pct = (px / pos["entry_price"] - 1) * 100
+            return (f"📌 <b>{sym}</b> {pos['qty']} lot | maliyet {tl(pos['entry_price'])} → {tl(px)} ({pct:+.2f}%)\n"
+                    f"🎯 Kâr al: {tl(pos['target'])}\n🛑 Zarar kes: {tl(pos['stop'])}" + daytrade_note())
+        return _one([sym])
+
+    def daytrade_note() -> str:
+        if eng.daytrade:
+            return f"\n⏰ Ne olursa olsun {cfg.raw.get('gunici', {}).get('close_at', '17:30')}'da sat (günlük al-sat)."
+        return ""
+
+    tg.text_handler = _text
+
     @tg.on_callback("ok")
     def _ok(arg, mid):
         return eng.confirm_pending(int(arg), mid)

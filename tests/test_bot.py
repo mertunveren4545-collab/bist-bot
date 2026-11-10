@@ -194,12 +194,13 @@ def test_no_heartbeat_when_signal(cfg, tmp_path):
     assert not any("kontrol" in m[0] for m in tg.sent)
 
 
-def plan_engine(cfg, tmp_path, n_up=4):
+def plan_engine(cfg, tmp_path, n_up=4, names=None):
     cfg.raw["daily_plan"] = True
     cfg.raw["max_new_per_day"] = 2
     cfg.raw["send_every_check"] = False
     cfg.raw["strategy"]["buy_threshold"] = 1
-    frames = {f"UP{i}": make_df(drift=0.003, seed=10 + i) for i in range(n_up)}
+    names = names or [f"UP{i}" for i in range(n_up)]
+    frames = {nm: make_df(drift=0.003, seed=10 + i) for i, nm in enumerate(names)}
     cfg.raw["universe"] = list(frames)
     prices = {k: float(v.Close.iloc[-1]) for k, v in frames.items()}
     db = Storage(tmp_path / "p.db")
@@ -250,3 +251,32 @@ def test_telegram_claim_chat():
     tg = Telegram("tok", "")
     assert tg.claim_chat({"message": {"chat": {"id": 555}, "text": "/start"}}) == "555"
     assert tg.chat_id == "555" and tg.enabled
+
+
+def test_daytrade_levels_and_close(cfg, tmp_path, monkeypatch):
+    eng, db, tg, prices = plan_engine(cfg, tmp_path)
+    cfg.raw["trade_style"] = "gunici"
+    cfg.raw["gunici"] = {"stop_pct": 1.5, "target_pct": 2.5, "trail_pct": 1.5, "close_at": "00:00"}
+    msg = eng.manual_buy("UP0", 100, 100.0)
+    pos = db.position("UP0")
+    assert pos["stop"] == pytest.approx(98.5, abs=0.06) and pos["target"] == pytest.approx(102.5, abs=0.06)
+    prices["UP0"] = 100.5  # ne stop ne hedef; ama kapanış saati geçti
+    eng.intraday()
+    sells = [p for p in db.open_pendings() if p["side"] == "SELL"]
+    assert sells and "Gün sonu" in sells[0]["reason"]
+
+
+def test_text_messages(cfg, tmp_path):
+    import main as m
+    eng, db, tg, prices = plan_engine(cfg, tmp_path, names=["ALARK", "GARAN"])
+    cfg.raw["trade_style"] = "gunici"
+    cfg.raw["gunici"] = {"stop_pct": 1.5, "target_pct": 2.5, "trail_pct": 1.5, "close_at": "23:59"}
+    real = Telegram("", "1")
+    m.register_commands(real, eng, cfg)
+    p0 = prices["ALARK"]
+    r = real.text_handler("Alark aldım 53 binlik satış kac")
+    assert db.position("ALARK")["qty"] == int(53000 // p0) and "Zarar kes" in r
+    assert "Kâr al" in real.text_handler("alark")
+    r = real.text_handler(f"ALARK sattım {p0 * 1.02:.2f}".replace(".", ","))
+    assert db.position("ALARK") is None and "K/Z" in r
+    assert "Anlayamadım" in real.text_handler("merhaba")

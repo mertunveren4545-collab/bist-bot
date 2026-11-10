@@ -2,8 +2,8 @@ name: BIST Bot
 
 on:
   schedule:
-    # Hafta içi her 15 dakikada bir, 09:00-18:59 İstanbul saati (UTC 06-15)
-    - cron: "*/15 6-15 * * 1-5"
+    # Hafta içi her 10 dakikada bir, 09:00-18:59 İstanbul saati (UTC 06-15)
+    - cron: "*/10 6-15 * * 1-5"
   workflow_dispatch:      # Actions sekmesinden elle "Run workflow" ile de çalışır
     inputs:
       gorev:

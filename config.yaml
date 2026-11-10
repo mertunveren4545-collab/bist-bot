@@ -13,6 +13,16 @@ mode: midas
 daily_plan: true
 max_new_per_day: 2
 
+# İşlem tarzı:
+#   gunici -> günlük al-sat: sabah al, aynı gün sat. Yüzdesel stop/hedef, kapanışta her şeyi sat.
+#   swing  -> birkaç gün/hafta tut (ATR'ye göre stop/hedef)
+trade_style: gunici
+gunici:
+  stop_pct: 1.5        # alış fiyatının %1,5 altı zarar kes
+  target_pct: 2.5      # alış fiyatının %2,5 üstü kâr al
+  trail_pct: 1.5       # fiyat yükseldikçe stop, zirvenin %1,5 altına taşınır
+  close_at: "17:30"    # bu saatte elde kalan her şey için SAT uyarısı
+
 # Her 15 dk'lık kontrolde, al/sat sinyali çıkmasa bile kısa bir durum mesajı gönder
 # (sessiz bildirim: telefon titremez; AL/SAT sinyalleri ise sesli gelir)
 send_every_check: false
@@ -83,8 +93,8 @@ risk:
 
 # ----------------- Zamanlama (İstanbul saati) -----------------
 schedule:
-  morning_scan: "09:45"          # açılış öncesi tarama + Telegram'a günün listesi
-  intraday_every_min: 15         # seans içinde kaç dakikada bir kontrol
+  morning_scan: "10:20"          # günlük al-satta açılıştan sonra (veri ~15 dk gecikmeli)          # açılış öncesi tarama + Telegram'a günün listesi
+  intraday_every_min: 10         # seans içinde kaç dakikada bir kontrol
   session_start: "10:00"
   session_end: "18:00"
   eod_report: "18:20"            # gün sonu raporu

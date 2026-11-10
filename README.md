@@ -7,15 +7,22 @@ alım/satım kararı verir ve her şeyi Telegram'dan sana bildirir.
 
 | Saat (İstanbul) | Ne gelir |
 |---|---|
-| ~09:45 | ☀️ **Sabah planı:** piyasa durumu, en güçlü 5 hisse ve **bugün alınacak en fazla 2 hisse** (lot, fiyat, zarar kes, kâr al). Her birinin altında **✅ Midas'ta aldım / ❌ Geç** butonu. |
-| 10:00 – 18:00 | Her 15 dk'da bir **sadece elindeki hisseler** kontrol edilir. Zarar kes / kâr al / puan düşüşü olursa **🔴 SAT** mesajı gelir. Gün içinde **yeni alım önerilmez.** |
+| ~10:20 | ☀️ **Sabah planı (günlük al-sat):** piyasa durumu, en güçlü 5 hisse ve **bugün alınacak en fazla 2 hisse** (lot, fiyat, zarar kes, kâr al). Her birinin altında **✅ Midas'ta aldım / ❌ Geç** butonu. |
+| 10:00 – 17:30 | Her 10 dk'da bir **sadece elindeki hisseler** kontrol edilir: kâr al (+%2,5), zarar kes (−%1,5), iz süren stop olursa **🔴 SAT**. Gün içinde **yeni alım önerilmez.** |
+| 17:30 | Elde kalan her hisse için **🔴 SAT** — günlük al-satta ertesi güne taşınmaz. |
 | ~18:20 | 🌙 Gün sonu raporu |
 
-- Bot sadece ✅ bastığın hisseleri takip eder. ❌ dediğin satış uyarısını o gün tekrar sormaz.
+- **Normal yazıyla konuşabilirsin:**
+  - `ALARK aldım 53 bin` → lotu hesaplar, takibe alır, kâr al / zarar kes seviyelerini yazar
+  - `THYAO 100 lot aldım 285,50` → fiyatı ve lotu sen verirsin
+  - `ALARK sattım 107,30` → satışı kaydeder, kâr/zararı yazar
+  - `ALARK` → elindeyse durum ve hedefler, değilse puanı
+  - `aldım` → bekleyen tek alım sinyalini onaylar
+- Bot sadece ✅ bastığın ya da "aldım" yazdığın hisseleri takip eder. ❌ dediğin satış uyarısını o gün tekrar sormaz.
 - Midas'taki serbest bakiyeni `/nakit 50000` ile söyle; lotları buna göre hesaplar. Onay bekleyen alımların parasını ayrı tutar.
 - Kendi kafana göre bir şey aldıysan `/aldim THYAO 100 285,50` yaz, bot onu da takibe alır.
 - Botun haberi olmadan sattıysan `/sattim THYAO 295,25` yaz.
-- Butona bastığında bot bunu bir sonraki kontrolde (en geç ~15 dk) işler. Komutlara da seans saatlerinde en geç 15 dk içinde cevap gelir; akşam yazdığın komut ertesi sabah cevaplanır.
+- Butona bastığında bot bunu bir sonraki kontrolde (en geç ~10 dk) işler. Komutlara da seans saatlerinde en geç 10 dk içinde cevap gelir; akşam yazdığın komut ertesi sabah cevaplanır.
 
 **Puanlama (0-100):** Trend 30 + Momentum (RSI, MACD) 25 + Hacim 15 + Haber 30. 65 ve üstü alım adayı.
 **Haberler:** Google Haberler (KAP dahil), Bloomberg HT, AA, Dünya — Türkçe olumlu/olumsuz kelime skoru.
@@ -40,7 +47,7 @@ Bilgisayarın kapalı olabilir.
 Bundan sonra bot hafta içi her sabah kendisi başlar. Durdurmak için Telegram'dan `/durdur`,
 tamamen kapatmak için Actions → BIST Bot → "…" → **Disable workflow**.
 
-**Ücret:** Gizli (private) repoda GitHub ayda 2.000 dakika ücretsiz veriyor; bu bot ayda yaklaşık 700-1.000 dakika kullanır.
+**Ücret:** Gizli (private) repoda GitHub ayda 2.000 dakika ücretsiz veriyor; bu bot ayda yaklaşık 1.100-1.400 dakika kullanır. (Diğer gizli repolarının Actions kullanımı da aynı kotadan düşer.)
 
 ## 3 çalışma modu (config.yaml → mode)
 

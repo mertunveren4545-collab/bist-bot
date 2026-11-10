@@ -81,6 +81,26 @@ class Engine:
         self._news_ts = time.time()
 
     @property
+    def daytrade(self) -> bool:
+        return self.cfg.raw.get("trade_style") == "gunici"
+
+    def _eff(self, price: float, atr_val: float) -> tuple[float, dict]:
+        """Günlük al-satta ATR yerine yüzde stop/hedef kullan (mevcut risk fonksiyonlarına uyarlanır)."""
+        if not self.daytrade:
+            return atr_val, self.cfg.risk
+        g = self.cfg.raw.get("gunici", {})
+        sp, tp, tr = g.get("stop_pct", 1.5), g.get("target_pct", 2.5), g.get("trail_pct", 1.5)
+        r = dict(self.cfg.risk, stop_loss_atr=1.0, take_profit_atr=tp / sp, trailing_stop_atr=tr / sp)
+        return price * sp / 100, r
+
+    def close_time_reached(self) -> bool:
+        if not self.daytrade:
+            return False
+        h, m = map(int, self.cfg.raw.get("gunici", {}).get("close_at", "17:30").split(":"))
+        t = now()
+        return t >= t.replace(hour=h, minute=m, second=0, microsecond=0)
+
+    @property
     def plan_mode(self) -> bool:
         return bool(self.cfg.raw.get("daily_plan", False))
 
@@ -142,7 +162,8 @@ class Engine:
         if not ok:
             return why
         eq = self.equity()
-        plan = position_plan(sc.price, sc.atr, eq, self.free_cash(), self.cfg.risk)
+        a, r = self._eff(sc.price, sc.atr)
+        plan = position_plan(sc.price, a, eq, self.free_cash(), r)
         if not plan:
             return f"{sc.symbol}: yeterli nakit/lot yok"
         reason = f"Puan {sc.total:.0f} — {'; '.join(sc.notes) or sc.summary()}"
@@ -234,8 +255,9 @@ class Engine:
         df = self.daily_fn(symbol)
         sc = score_symbol(symbol, df, self.news_scores.get(symbol, 0.0), self.cfg.strategy) if df is not None else None
         atr_val = sc.atr if sc else price * 0.03
-        stop = round_tick(price - self.cfg.risk["stop_loss_atr"] * atr_val)
-        target = round_tick(price + self.cfg.risk["take_profit_atr"] * atr_val)
+        a, r = self._eff(price, atr_val)
+        stop = round_tick(price - r["stop_loss_atr"] * a)
+        target = round_tick(price + r["take_profit_atr"] * a)
         self.record_fill("BUY", symbol, qty, price, stop, target, "Manuel alım (/aldim)")
         return (f"✅ {symbol} {qty} lot @ {tl(price)} takibe alındı.\n"
                 f"Zarar kes {tl(stop)} | Kâr al {tl(target)}")
@@ -346,13 +368,25 @@ class Engine:
             if price is None:
                 continue
             sc = self.scores.get(pos["symbol"])
-            atr_val = sc.atr if sc else (pos["entry_price"] - pos["stop"]) / self.cfg.risk["stop_loss_atr"]
-            new_stop, highest = trail_stop(pos, price, atr_val, self.cfg.risk)
+            if self.daytrade:
+                atr_val, r = self._eff(pos["entry_price"], 0)
+            else:
+                r = self.cfg.risk
+                atr_val = sc.atr if sc else (pos["entry_price"] - pos["stop"]) / r["stop_loss_atr"]
+            new_stop, highest = trail_stop(pos, price, atr_val, r)
             if new_stop > pos["stop"] or highest > pos["highest"]:
                 self.db.update_stop(pos["symbol"], new_stop, highest)
                 pos = {**pos, "stop": new_stop, "highest": highest}
             days = (now() - datetime.fromisoformat(pos["opened_at"])).days
-            why = exit_reason(pos, price, sc.total if sc else None, days, self.cfg.risk,
+            if self.daytrade:
+                why = exit_reason(pos, price, None, 0, r, -1)
+                force = False
+                if not why and self.close_time_reached():
+                    why, force = "Gün sonu — günlük al-satta pozisyon ertesi güne taşınmaz", True
+                if why:
+                    self.sell(pos, price, why, force=force)
+                continue
+            why = exit_reason(pos, price, sc.total if sc else None, days, r,
                               self.cfg.strategy["sell_threshold"])
             if why:
                 self.sell(pos, price, why)
@@ -411,9 +445,11 @@ class Engine:
                f"Puan: {sc.total:.0f}/100 ({sc.summary()})")
         if sc.notes:
             txt += "\n• " + "\n• ".join(escape(n) for n in sc.notes)
+        if self.daytrade:
+            txt += f"\n⏰ Günlük al-sat: hedef/stop olmazsa {self.cfg.raw.get('gunici', {}).get('close_at', '17:30')}'da sat."
         if not filled:
             txt += (f"\n\nMidas → {sc.symbol} → Al → Limit {tl(price)} → {plan.qty} adet."
-                    f"\nEmir gerçekleşince ✅'ye bas. (no {pid})")
+                    f"\nEmir gerçekleşince ✅'ye bas ya da 'aldım' yaz. (no {pid})")
         return txt
 
     def _sell_text(self, pos, price, pnl, reason, filled: bool, pid=None) -> str:
