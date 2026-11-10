@@ -36,7 +36,16 @@ def main() -> None:
     if not chat_id:
         import requests
 
+        me = requests.get(f"{tg.base}/getMe", timeout=30).json()
+        if not me.get("ok"):
+            log.error("Telegram token GEÇERSİZ: %s (token %d karakter, başı %s...)",
+                      me.get("description"), len(cfg.telegram_token), cfg.telegram_token[:4])
+            return
+        log.info("Telegram bot: @%s", me["result"].get("username"))
         r = requests.get(f"{tg.base}/getUpdates", params={"timeout": 0}, timeout=30).json()
+        if not r.get("ok"):
+            log.error("getUpdates hatası: %s", r)
+        log.info("Bekleyen mesaj sayısı: %d", len(r.get("result", [])))
         for upd in r.get("result", []):
             cid = tg.claim_chat(upd)
             if cid:

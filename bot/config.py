@@ -71,9 +71,14 @@ def load_config(config_path: str | Path | None = None) -> Config:
     config_path = Path(config_path or ROOT / "config.yaml")
     _load_env(ROOT / ".env")
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    import re
+
+    tok = os.getenv("TELEGRAM_TOKEN", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    m = re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", tok)  # başında/sonunda fazlalık varsa ayıkla
+    tok = m.group(0) if m else tok.strip()
     cfg = Config(
         raw=raw,
-        telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
+        telegram_token=tok,
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         algolab_api_key=os.getenv("ALGOLAB_API_KEY", ""),
         algolab_username=os.getenv("ALGOLAB_USERNAME", ""),
