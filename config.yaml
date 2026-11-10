@@ -1,0 +1,108 @@
+# =============================================================
+#  BIST BOT AYARLARI  —  burayı kendine göre düzenle
+# =============================================================
+
+# Çalışma modu:
+#   paper   -> sanal parayla işlem (VARSAYILAN, önce bununla test et)
+#   midas   -> sinyal Telegram'a butonlu gelir, emri sen Midas'ta girersin
+#   algolab -> Deniz Yatırım Algolab API ile tam otomatik emir (API anahtarı gerekir)
+mode: midas
+
+# Günlük plan: alım önerileri SADECE sabah gelir (max_new_per_day kadar).
+# Gün içinde 15 dk'da bir sadece elindeki hisseler kontrol edilir, satış zamanı gelince haber verilir.
+daily_plan: true
+max_new_per_day: 2
+
+# Her 15 dk'lık kontrolde, al/sat sinyali çıkmasa bile kısa bir durum mesajı gönder
+# (sessiz bildirim: telefon titremez; AL/SAT sinyalleri ise sesli gelir)
+send_every_check: false
+
+# Sanal başlangıç sermayesi (paper modu) / takip edilecek sermaye (midas modu)
+starting_cash: 100000
+
+# Taranacak hisseler (BIST'in likit büyük hisseleri). İstediğin gibi ekle/çıkar.
+# Kodlar Yahoo formatında otomatik ".IS" eki alır, sen sadece kodu yaz.
+universe:
+  - AKBNK
+  - ALARK
+  - ASELS
+  - ASTOR
+  - BIMAS
+  - CCOLA
+  - EKGYO
+  - ENKAI
+  - EREGL
+  - FROTO
+  - GARAN
+  - GUBRF
+  - ISCTR
+  - KCHOL
+  - KRDMD
+  - MGROS
+  - PETKM
+  - PGSUS
+  - SAHOL
+  - SASA
+  - SISE
+  - TAVHL
+  - TCELL
+  - THYAO
+  - TOASO
+  - TTKOM
+  - TUPRS
+  - ULKER
+  - YKBNK
+
+# Endeks filtresi: endeks kendi 50 günlük ortalamasının altındaysa yeni alım yapılmaz
+market_index: XU100
+use_market_filter: true
+
+# ----------------- Strateji puanlaması (0-100) -----------------
+strategy:
+  buy_threshold: 65        # bu puanın üstündeki hisseler alım adayı
+  sell_threshold: 35       # elimizdeki hisse bu puanın altına düşerse sat
+  weights:                 # toplam 100
+    trend: 30              # EMA20 > EMA50 > EMA200, fiyat ortalamaların üstünde
+    momentum: 25           # RSI ve MACD
+    volume: 15             # hacim son 20 günün ortalamasının üstünde mi
+    news: 30               # haber/KAP duygu skoru
+  rsi_overbought: 75       # RSI bunun üstündeyse "aşırı alım", puan kırılır
+
+# ----------------- Risk yönetimi -----------------
+risk:
+  max_open_positions: 5          # aynı anda en fazla kaç hisse
+  max_position_pct: 20           # tek hisseye sermayenin en fazla %'si
+  risk_per_trade_pct: 1.0        # her işlemde stop olursa kaybedilecek max sermaye %'si
+  stop_loss_atr: 2.0             # zarar kes = giriş - 2 x ATR
+  take_profit_atr: 4.0           # kâr al  = giriş + 4 x ATR
+  trailing_stop_atr: 2.5         # fiyat yükseldikçe stop da yukarı taşınır
+  max_daily_loss_pct: 3.0        # gün içi toplam kayıp bunu geçerse bot o gün işlem durdurur
+  max_trades_per_day: 6
+  min_cash_pct: 10               # kasada her zaman en az bu kadar nakit kalsın
+  max_holding_days: 20           # bu kadar gün tutup kâra geçmeyeni sat
+
+# ----------------- Zamanlama (İstanbul saati) -----------------
+schedule:
+  morning_scan: "09:45"          # açılış öncesi tarama + Telegram'a günün listesi
+  intraday_every_min: 15         # seans içinde kaç dakikada bir kontrol
+  session_start: "10:00"
+  session_end: "18:00"
+  eod_report: "18:20"            # gün sonu raporu
+  avoid_first_minutes: 15        # açılıştan sonraki ilk X dakika yeni alım yapma
+
+# ----------------- Haber kaynakları (RSS) -----------------
+news:
+  lookback_hours: 48
+  # Her hisse için Google Haberler'de "<KOD> hisse" araması yapılır.
+  google_news_per_ticker: true
+  general_feeds:
+    - https://www.bloomberght.com/rss
+    - https://www.aa.com.tr/tr/rss/default?cat=ekonomi
+    - https://www.dunya.com/rss?dunya
+  # Bir habere -1..+1 arası skor verilir; bu kelimeler skoru belirler (bot/news.py içinde genişletebilirsin)
+
+# Midas modunda onay bekleyen sinyal kaç dakika sonra iptal olsun
+midas_confirm_timeout_min: 540
+
+# Resmi tatiller (borsa kapalı) — YYYY-AA-GG formatında ekle
+holidays: []
