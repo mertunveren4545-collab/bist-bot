@@ -384,6 +384,100 @@ class Engine:
         self.db._exec("UPDATE pending SET qty=?, price=?, stop=?, target=? WHERE id=?",
                       (qty, price, stop, target, pid))
 
+    def day_rules(self, pos: dict, price: float, notify: bool = True):
+        """Günlük al-sat kuralları. (güncel_pos, satış_sebebi|None, zorla, mesajlar) döner."""
+        sym, entry, qty = pos["symbol"], pos["entry_price"], pos["qty"]
+        g = self.cfg.raw.get("gunici", {})
+        t1 = self.db.get(self._t1_key(sym)) or pos["target"]
+        hi = max(pos["highest"], price)
+        stop = pos["stop"]
+        msgs: list[tuple[str, bool]] = []
+        if price >= entry + 0.6 * (t1 - entry) and stop < entry:
+            stop = entry
+            msgs.append((f"🔒 {sym} 1. hedefe yaklaştı, zarar kes alış fiyatına ({tl(entry)}) çekildi. "
+                         "Artık zararla çıkma ihtimalin yok.", True))
+        locked = bool(self.db.get(f"locked:{sym}"))
+        if (price >= t1 or locked) and t1 < pos["target"]:
+            lock = round_tick(entry + g.get("lock_share", 0.65) * (t1 - entry))
+            trail = round_tick(hi * (1 - g.get("trail_after_t1_pct", 0.6) / 100))
+            stop = max(stop, lock, trail)
+            if not locked:
+                self.db.set(f"locked:{sym}", True)
+                locked = True
+                msgs.append((f"🎯 <b>{sym} 1. hedefi gördü</b> ({tl(price)}, ≈ +{tl((price - entry) * qty)})\n"
+                             f"Satmıyoruz, 2. hedef {tl(pos['target'])} için bekliyoruz.\n"
+                             f"🔒 Zarar kes {tl(stop)}'a çekildi → en kötü ≈ +{tl((stop - entry) * qty)} kârla çıkarsın.\n"
+                             "Fiyat yükseldikçe bu seviyeyi yukarı taşıyacağım.", False))
+        if stop != pos["stop"] or hi != pos["highest"]:
+            self.db.update_stop(sym, stop, hi)
+        pos = {**pos, "stop": stop, "highest": hi}
+        why, force = None, False
+        if price >= pos["target"]:
+            why, force = f"🚀 2. HEDEF geldi (≈ +{tl((price - entry) * qty)})", True
+        elif price <= stop:
+            force = True
+            if stop > entry:
+                why = f"Kâr kilidi — fiyat geri döndü (≈ +{tl((price - entry) * qty)})"
+            elif stop == entry:
+                why = "Başa baş — fiyat alış seviyesine döndü"
+            else:
+                why = f"ZARAR KES (≈ −{tl((entry - price) * qty)})"
+        elif self.close_time_reached():
+            why, force = "Gün sonu — günlük al-satta pozisyon ertesi güne taşınmaz", True
+        if notify:
+            for text, silent in msgs:
+                self.tg.send(text, silent=silent)
+                self._signals_this_check += 1
+        return pos, why, force, msgs
+
+    def live_price(self, symbol: str, max_age_min: int = 12) -> float | None:
+        """Kullanıcının yazdığı anlık fiyat (gecikmeli veriden daha güncel)."""
+        v = self.db.get(f"live:{symbol}")
+        if not v:
+            return None
+        age = (now() - datetime.fromisoformat(v["ts"])).total_seconds() / 60
+        return float(v["price"]) if age <= max_age_min else None
+
+    def advice(self, symbol: str, user_price: float | None = None) -> str:
+        """Elimdeki hisse için net tavsiye: BEKLE / SAT."""
+        pos = self.db.position(symbol)
+        if not pos:
+            return f"{symbol} takipte değil."
+        if user_price:
+            self.db.set(f"live:{symbol}", {"price": user_price, "ts": now().isoformat()})
+        live = user_price or self.live_price(symbol)
+        px = live or self.prices_fn([symbol]).get(symbol) or pos["entry_price"]
+        entry, qty = pos["entry_price"], pos["qty"]
+        if self.daytrade:
+            pos, why, force, msgs = self.day_rules(pos, px, notify=False)
+        else:
+            why, msgs = exit_reason(pos, px, None, 0, self.cfg.risk, -1), []
+        pnl = (px - entry) * qty
+        t1 = self.db.get(self._t1_key(symbol)) if self.daytrade else None
+        lines = [m for m, _ in msgs]
+        src = "senin yazdığın fiyat" if live else "son gördüğüm fiyat (~15 dk gecikmeli)"
+        lines.append(f"📊 <b>{symbol}</b> {tl(px)} ({src}) | maliyet {tl(entry)} → "
+                     f"<b>{'+' if pnl >= 0 else '−'}{tl(abs(pnl))}</b> ({(px / entry - 1) * 100:+.2f}%)")
+        if why:
+            lines.append(f"\n🔴 <b>SAT</b> — {why}\nSatınca bana 'sattım' yaz.")
+        else:
+            lines.append("\n🟡 <b>BEKLE</b>")
+            if self.db.get(f"locked:{symbol}"):
+                lines.append(f"• Kâr kilitli: fiyat {tl(pos['stop'])} altına inerse ≈ +{tl((pos['stop'] - entry) * qty)} ile satarız.")
+            elif pos["stop"] >= entry:
+                lines.append(f"• Zarar riski yok: zarar kes alış fiyatında ({tl(pos['stop'])}).")
+            else:
+                lines.append(f"• Zarar kes: {tl(pos['stop'])} (≈ −{tl((entry - pos['stop']) * qty)})")
+            if t1 and px < t1:
+                lines.append(f"• 1. hedef {tl(t1)} (≈ +{tl((t1 - entry) * qty)}) — kalan %{(t1 / px - 1) * 100:.2f}")
+            lines.append(f"• 2. hedef {tl(pos['target'])} (≈ +{tl((pos['target'] - entry) * qty)}) — kalan %{(pos['target'] / px - 1) * 100:.2f}")
+            if self.daytrade:
+                lines.append(f"• Hiçbiri olmazsa {self.cfg.raw.get('gunici', {}).get('close_at', '17:30')}'da sat.")
+        if not live:
+            ex = f"{round_tick(px * 1.003):.2f}".replace(".", ",")
+            lines.append(f"\nMidas'taki anlık fiyatı yazarsan (ör. <code>{ex}</code>) ona göre söylerim.")
+        return "\n".join(lines)
+
     def limit_hint(self, symbol: str, qty: int, target: float) -> str:
         if not self.daytrade:
             return ""
@@ -508,41 +602,12 @@ class Engine:
                 continue
             sc = self.scores.get(pos["symbol"])
             if self.daytrade:
-                atr_val, r = self._eff(pos["entry_price"], 0)
-                sym, entry, qty = pos["symbol"], pos["entry_price"], pos["qty"]
-                t1 = self.db.get(self._t1_key(sym)) or pos["target"]
-                g = self.cfg.raw.get("gunici", {})
-                be = entry + 0.6 * (t1 - entry)
-                if price >= be and pos["stop"] < entry:
-                    self.db.update_stop(sym, entry, max(pos["highest"], price))
-                    pos = {**pos, "stop": entry, "highest": max(pos["highest"], price)}
-                    self.tg.send(f"🔒 {sym} 1. hedefe yaklaştı, zarar kes alış fiyatına ({tl(entry)}) çekildi. "
-                                 "Artık zararla çıkma ihtimalin yok.", silent=True)
-                if price >= t1 and t1 < pos["target"]:
-                    lock = round_tick(entry + g.get("lock_share", 0.65) * (t1 - entry))
-                    hi = max(pos["highest"], price)
-                    trail = round_tick(hi * (1 - g.get("trail_after_t1_pct", 0.6) / 100))
-                    new_stop = max(pos["stop"], lock, trail)
-                    if new_stop > pos["stop"]:
-                        self.db.update_stop(sym, new_stop, hi)
-                        pos = {**pos, "stop": new_stop, "highest": hi}
-                    if not self.db.get(f"locked:{sym}"):
-                        self.db.set(f"locked:{sym}", True)
-                        self.tg.send(f"🎯 <b>{sym} 1. hedefi gördü</b> ({tl(price)}, ≈ +{tl((price - entry) * qty)})\n"
-                                     f"Satmıyoruz, 2. hedef {tl(pos['target'])} için bekliyoruz.\n"
-                                     f"🔒 Zarar kes {tl(new_stop)}'a çekildi → en kötü ≈ +{tl((new_stop - entry) * qty)} kârla çıkarsın.\n"
-                                     "Fiyat yükseldikçe bu seviyeyi yukarı taşıyacağım.")
-                    self._signals_this_check += 1
-                    atr_val, r = 0.0, {**self.cfg.risk}
-                    why = exit_reason(pos, price, None, 0, {**r, "max_holding_days": 10**6}, -1)
-                    if why and price <= pos["stop"]:
-                        why = f"Kâr kilidi — fiyat geri döndü (≈ +{tl((price - entry) * qty)})"
-                    if not why and self.close_time_reached():
-                        why = "Gün sonu — günlük al-satta pozisyon ertesi güne taşınmaz"
-                    if why:
-                        self.sell(pos, price, why, force=True)
-                    continue
-            else:
+                price = self.live_price(pos["symbol"]) or price
+                pos, why, force, _ = self.day_rules(pos, price)
+                if why:
+                    self.sell(pos, price, why, force=force)
+                continue
+            if True:
                 r = self.cfg.risk
                 atr_val = sc.atr if sc else (pos["entry_price"] - pos["stop"]) / r["stop_loss_atr"]
             new_stop, highest = trail_stop(pos, price, atr_val, r)

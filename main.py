@@ -214,6 +214,17 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
                 if px:
                     return eng.manual_sell(p0["symbol"], px)
             return "Hangi hisse? Örnek: <code>ALARK aldım 53 bin</code> veya <code>ALARK sattım 107,30</code>"
+        positions = eng.db.positions()
+
+        def plausible(px, ref):
+            return px if px and ref and 0.85 * ref <= px <= 1.15 * ref else None
+
+        # Hisse adı yok, al/sat yok -> elindeki hisse hakkında konuşuyor
+        if not sym and not q["action"] and len(positions) == 1:
+            p0 = positions[0]
+            return eng.advice(p0["symbol"], plausible(q["price"], p0["entry_price"]))
+        if not sym and not q["action"] and len(positions) > 1:
+            return "\n\n".join(eng.advice(p["symbol"]) for p in positions)
         if not sym:
             return ("Anlayamadım 🙂 Şöyle yazabilirsin:\n"
                     "• <code>ALARK aldım 53 bin</code>\n• <code>THYAO 100 lot aldım 285,50</code>\n"
@@ -247,8 +258,10 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
             if not price:
                 return f"Satış fiyatını da yaz: <code>{sym} sattım 107,30</code>"
             return eng.manual_sell(sym, price)
-        # sadece hisse adı / soru: durum bilgisi
+        # sadece hisse adı / soru: elimdeyse tavsiye
         pos = eng.db.position(sym)
+        if pos:
+            return eng.advice(sym, plausible(q["price"], pos["entry_price"]))
         if pos:
             px = price or pos["entry_price"]
             pct = (px / pos["entry_price"] - 1) * 100

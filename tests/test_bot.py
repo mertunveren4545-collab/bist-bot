@@ -359,3 +359,20 @@ def test_fill_corrections(cfg, tmp_path):
     pos = db.position("YKBNK")
     assert pos["qty"] == 1259 and pos["entry_price"] == pytest.approx(round(p0 * 0.99, 2))
     assert pos["stop"] < pos["entry_price"] < db.get("t1:YKBNK") <= pos["target"]
+
+
+def test_advice_messages(cfg, tmp_path):
+    import main as m
+    eng, db, tg, prices = plan_engine(cfg, tmp_path, names=["YKBNK", "GARAN"])
+    cfg.raw["trade_style"] = "gunici"
+    cfg.raw["gunici"] = dict(GUN)
+    eng.manual_buy("YKBNK", 1259, 38.10)
+    real = Telegram("", "1")
+    m.register_commands(real, eng, cfg)
+    prices["YKBNK"] = 38.30
+    assert "BEKLE" in real.text_handler("1. hedefi geçtik")
+    r = real.text_handler("şu an 38,70")
+    assert "1. hedefi gördü" in r and "BEKLE" in r
+    prices["YKBNK"] = 38.30  # gecikmeli veri eski; kullanıcının fiyatı geçerli
+    assert "BEKLE" in real.text_handler("satayım mı")
+    assert "SAT" in real.text_handler("38,40 geriledi ne yapayım").split("BEKLE")[0]

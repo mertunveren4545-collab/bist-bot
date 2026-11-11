@@ -41,7 +41,7 @@ def parse(text: str, universe: list[str]) -> dict:
         if w in uni:
             out["symbol"] = w
             break
-    if not out["symbol"]:
+    if not out["symbol"] and action:  # listede olmayan kodu sadece al/sat mesajlarında tahmin et
         for w in words:
             if w not in STOP and re.fullmatch(r"[A-Z]{4,5}", w):
                 out["symbol"] = w
