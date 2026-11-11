@@ -124,12 +124,13 @@ class Telegram:
             return self.chat_id
         return None
 
-    def poll_once(self, offset: int) -> int:
+    def poll_once(self, offset: int, wait: int = 0) -> int:
         """Bekleyen mesaj/butonları bir kere işler, yeni offset'i döner (GitHub Actions için)."""
         if not self.token:
             return offset
         try:
-            r = requests.get(f"{self.base}/getUpdates", params={"offset": offset, "timeout": 0}, timeout=30)
+            r = requests.get(f"{self.base}/getUpdates", params={"offset": offset, "timeout": wait},
+                             timeout=wait + 15)
             for upd in r.json().get("result", []):
                 offset = upd["update_id"] + 1
                 try:
