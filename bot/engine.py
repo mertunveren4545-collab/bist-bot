@@ -710,6 +710,7 @@ class Engine:
         busy = len(self.db.positions()) + sum(1 for p in self.db.open_pendings() if p["side"] == "BUY")
         if busy >= g.get("max_concurrent", 1):
             return
+        log.info("Yeni giriş kontrolü (%s)", "kripto" if self.kripto else "BIST")
         bought_today = {x["symbol"] for x in self.db.trades_today() if x["side"] == "BUY"}
         buys_today = len(bought_today)
         if buys_today >= g.get("max_trades_per_day", 3):
@@ -722,9 +723,11 @@ class Engine:
                 return
             self.db.set("last_rescan", time.time())
         if not self.market_is_ok():
+            log.info("Yeni giriş yok: piyasa filtresi")
             return
         scores = self.scan(refresh_news=True)
         th = self.cfg.strategy["buy_threshold"]
+        log.info("Adaylar: %s", ", ".join(f"{x.symbol}:{x.total:.0f}" for x in scores[:5]))
         for sc in scores:
             if sc.total < th:
                 break
