@@ -176,7 +176,8 @@ def setup():
         amount = float(args[0].replace(".", "").replace(",", "."))
         keng.db.set("cash", amount)
         keng.db.set(keng._day_key(), amount)
-        return f"🪙 Kripto bakiyesi {amount:,.0f} ₺ olarak kaydedildi."
+        keng.db.set("last_rescan", 0)  # hemen yeni fırsat taransın
+        return f"🪙 Kripto bakiyesi {amount:,.0f} ₺ olarak kaydedildi. Uygun coin varsa birkaç dakika içinde öneririm."
 
     @tg.command("kriptotara")
     def _kscan(args):

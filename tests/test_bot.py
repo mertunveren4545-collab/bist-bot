@@ -441,3 +441,13 @@ def test_crypto_windows():
     assert r.crypto_buy_window(cfg, kcfg, d("2027-10-29T11:00"))  # 29 Ekim tatil
     assert r.bist_open(cfg, d("2027-10-28T11:00")) and not r.bist_open(cfg, d("2027-10-28T13:00"))  # arife
     assert r.crypto_buy_window(cfg, kcfg, d("2027-10-28T13:00"))
+
+
+def test_kripto_unknown_cash_and_fees(tmp_path):
+    eng, db, tg, live, kcfg = kripto_engine(tmp_path)
+    eng.manual_buy("ETH", 0.3, 160000.0)  # bakiye hiç girilmemiş
+    assert eng.cash() >= 0
+    eng.manual_sell("ETH", 162000.0)
+    t = [x for x in db.all_trades() if x["side"] == "SELL"][-1]
+    assert t["pnl"] == pytest.approx(600 - 0.0015 * 0.3 * (162000 + 160000), abs=0.5)
+    assert eng.cash() == pytest.approx(0.3 * 160000 * 1.0015 + t["pnl"], abs=1)

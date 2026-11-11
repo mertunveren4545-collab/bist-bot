@@ -204,16 +204,21 @@ class Engine:
     # ======================================================== kayıt
     def record_fill(self, side, symbol, qty, price, stop=None, target=None, reason="") -> float:
         pnl = 0.0
+        fee_pct = float(self.cfg.raw.get("gunici", {}).get("fee_pct", 0.0)) / 100
         if side == "BUY":
-            self.db.add_cash(-qty * price, self.start_cash)
+            cost = qty * price * (1 + fee_pct)
+            if self.cash() < cost:  # bakiye bilinmiyorsa/eksikse: en az alım tutarı kadar varsay
+                self.db.add_cash(cost - self.cash(), self.start_cash)
+            self.db.add_cash(-cost, self.start_cash)
             self.db.open_position(symbol, qty, price, stop, target)
         else:
             pos = self.db.position(symbol)
             if not pos:
                 return 0.0
             qty = min(qty, pos["qty"])
-            pnl = (price - pos["entry_price"]) * qty
-            self.db.add_cash(qty * price, self.start_cash)
+            fees = fee_pct * qty * (price + pos["entry_price"])
+            pnl = (price - pos["entry_price"]) * qty - fees
+            self.db.add_cash(qty * price * (1 - fee_pct), self.start_cash)
             self.db.close_position(symbol)
         self.db.add_trade(symbol, side, qty, price, reason, pnl)
         return pnl
