@@ -182,6 +182,14 @@ def setup():
     def _kscan(args):
         return crypto_scan_text(keng, kcfg)
 
+    @tg.command("kriptoteshis")
+    def _kdiag(args):
+        t = now(); d = t.date().isoformat()
+        return (f"buy_window={keng.buy_window()} close={keng.close_time_reached()} "
+                f"morning_done={kdb.get('morning_done:' + d)} kplan={kdb.get('kplan:' + d)}\n"
+                f"positions={kdb.positions()}\npendings={kdb.open_pendings()}\n"
+                f"cash={keng.cash()} trades_today={len(kdb.trades_today())} last_rescan={kdb.get('last_rescan')}")
+
     @tg.command("kriptoislemler")
     def _kt(args):
         return dummy.commands["islemler"]([])
