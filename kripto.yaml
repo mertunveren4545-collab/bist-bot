@@ -1,0 +1,77 @@
+# =============================================================
+#  KRİPTO BOT AYARLARI (Midas Kripto, BIST kapalıyken çalışır)
+# =============================================================
+#  Ne zaman çalışır:
+#   * Hafta içi 18:00 – ertesi gün 09:00
+#   * Hafta sonu ve BIST tatil günleri 24 saat (holidays listesi config.yaml'da)
+#   * Arife (yarım gün) BIST kapanışından sonra
+#  Yeni alım önerisi sadece uyanık saatlerde gelir (aşağıda buy_hours).
+#  Gece boyunca bot fiyatı takip eder; hafta içi 09:00'da elde kalanı "SAT" der.
+
+market: kripto
+mode: midas
+daily_plan: true
+trade_style: gunici
+starting_cash: 0          # /kriptonakit ile bildirilir
+
+universe: [BTC, ETH, SOL, XRP, BNB, AVAX, LINK, DOGE, ADA, SUI]
+market_index: BTC          # Bitcoin son 24 saatte sert düşüyorsa yeni alım yok
+use_market_filter: true
+
+buy_hours:
+  weekday: ["18:05", "23:30"]     # hafta içi akşam
+  offday: ["09:30", "23:30"]      # hafta sonu / tatil
+force_close_at: "09:00"           # hafta içi sabah, BIST açılmadan önce
+
+gunici:
+  target_tl: 650          # 1. hedef: komisyon (2 x %0,15) sonrası net ≈ 650 TL
+  fee_pct: 0.15
+  stretch_max_pct: 4.0    # 2. hedef: kripto daha oynak, en fazla %4
+  stretch_range_share: 0.6
+  lock_share: 0.65
+  trail_after_t1_pct: 0.8
+  stop_ratio: 0.9
+  min_target_pct: 0.8
+  max_target_pct: 3.0
+  range_multiple: 2.0     # coin son 20 günde ortalama, hedefin en az 2 katı oynamalı
+  max_concurrent: 1
+  max_trades_per_day: 3
+  reentry_until: "23:00"
+  cash_buffer_pct: 0.5
+  min_order_tl: 50
+  stop_pct: 1.0
+  trail_pct: 1.5
+  max_index_drop_pct: 3.0 # BTC 24 saatte %3'ten fazla düştüyse alım yok
+  close_at: "09:00"
+
+strategy:
+  buy_threshold: 62
+  sell_threshold: 35
+  weights: {trend: 35, momentum: 30, volume: 20, news: 15}
+  rsi_overbought: 75
+
+risk:
+  max_open_positions: 1
+  max_position_pct: 100
+  risk_per_trade_pct: 1.5
+  stop_loss_atr: 2.0
+  take_profit_atr: 4.0
+  trailing_stop_atr: 2.5
+  max_daily_loss_pct: 4.0
+  max_trades_per_day: 8
+  min_cash_pct: 0
+  max_holding_days: 3
+
+schedule:                 # kripto için sadece rapor saati kullanılır
+  morning_scan: "18:05"
+  intraday_every_min: 3
+  session_start: "00:00"
+  session_end: "23:59"
+  eod_report: "09:05"
+  avoid_first_minutes: 0
+
+news:
+  google_news_per_ticker: false
+  general_feeds: []
+
+midas_confirm_timeout_min: 120

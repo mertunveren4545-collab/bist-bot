@@ -127,5 +127,22 @@ news:
 # Midas modunda onay bekleyen sinyal kaç dakika sonra iptal olsun
 midas_confirm_timeout_min: 540
 
-# Resmi tatiller (borsa kapalı) — YYYY-AA-GG formatında ekle
-holidays: []
+# BIST resmi tatilleri (borsa kapalı) — bu günlerde kripto botu 24 saat çalışır.
+# 2027 dini bayram tarihleri tahminidir; Borsa İstanbul Aralık'ta takvimi açıklayınca kontrol et.
+holidays:
+  - 2027-01-01
+  - 2027-03-09
+  - 2027-03-10
+  - 2027-03-11
+  - 2027-04-23
+  - 2027-05-17
+  - 2027-05-18
+  - 2027-05-19
+  - 2027-07-15
+  - 2027-08-30
+  - 2027-10-29
+# Yarım günler (arife): BIST 12:40'ta kapanır, sonrasında kripto botu devreye girer
+half_days:
+  - 2027-03-08
+  - 2027-10-28
+half_day_close: "12:40"

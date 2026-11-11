@@ -2,17 +2,16 @@ name: BIST Bot
 
 on:
   schedule:
-    # Hafta içi sabah başlatır; bot seans boyunca kapanmadan çalışır.
-    # Saatlik yedek tetik: döngü bir sebeple durursa yeniden başlatır (zaten çalışıyorsa sırada bekler).
-    - cron: "40 6 * * 1-5"
-    - cron: "5 7-15 * * 1-5"
+    # Bot 7/24 kapanmadan çalışır (gündüz BIST, BIST kapalıyken kripto).
+    # Yarım saatlik yedek tetik: döngü bir sebeple durursa yeniden başlatır (çalışıyorsa sırada bekler).
+    - cron: "7,37 * * * *"
   workflow_dispatch:      # Actions sekmesinden elle "Run workflow" ile de çalışır
     inputs:
       gorev:
         description: "dongu = seans boyunca çalış, otomatik = tek kontrol, sabah = sabah planını şimdi gönder, deneme = deneme planı"
         default: dongu
         type: choice
-        options: [dongu, otomatik, sabah, deneme]
+        options: [dongu, otomatik, sabah, deneme, kripto_deneme]
       mesaj:
         description: "Bota yazılmış gibi işlenecek mesaj (ör. YKBNK 1259 lot 38,10 aldım)"
         required: false
@@ -62,10 +61,6 @@ jobs:
 
       - name: Durumu kaydet
         if: always()
-        run: |
-          git config user.name "bist-bot"
-          git config user.email "bist-bot@users.noreply.github.com"
-          git add -f data/bot.db
-          git diff --cached --quiet || git commit -m "bot durumu $(date -u +%H:%M) [skip ci]"
-          git pull --rebase -X theirs -q || true
-          git push -q || true
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN || secrets.TELEGRAM_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN_ }}
+        run: python -c "import run_once; run_once.save_state()"

@@ -73,7 +73,12 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
                 "/nakit TUTAR — Midas'taki serbest bakiyeni bildir\n"
                 "/aldim KOD LOT FİYAT — kendi aldığın hisseyi takibe ekle\n"
                 "/sattim KOD FİYAT — kendi sattığın hisseyi kayıttan düş\n"
-                "/durdur — yeni alımları durdur  |  /devam — tekrar başlat")
+                "/durdur — yeni alımları durdur  |  /devam — tekrar başlat\n\n"
+                "🪙 <b>Kripto (BIST kapalıyken)</b>\n"
+                "/kripto — kripto durumu (BEKLE/SAT)\n"
+                "/kriptonakit TUTAR — Midas Kripto bakiyen\n"
+                "/kriptoislemler — son kripto işlemleri\n"
+                "Normal yazı da olur: <code>BTC aldım 48 bin</code>, <code>ETH sattım</code>")
 
     @tg.command("durum")
     def _status(args):
@@ -236,7 +241,7 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
         if not q["action"] and (q["qty"] or q["amount"]):
             q["action"] = "BUY"
         if q["action"] == "BUY" and pos_now and pos_now["opened_at"].startswith(today):
-            return eng.correct_position(sym, q["qty"] or (int(q["amount"] // price) if q["amount"] and price else None),
+            return eng.correct_position(sym, q["qty"] or (eng._qty(q["amount"] / price) if q["amount"] and price else None),
                                         None if derived else q["price"])
         if q["action"] == "BUY":
             if not price:
@@ -244,10 +249,10 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
             # bekleyen sinyal varsa onu onayla
             for p in eng.db.open_pendings():
                 if p["symbol"] == sym and p["side"] == "BUY":
-                    qty = q["qty"] or (int(q["amount"] // price) if q["amount"] else None)
+                    qty = q["qty"] or (eng._qty(q["amount"] / price) if q["amount"] else None)
                     eng.update_pending_fill(p["id"], qty, price)
                     return eng.confirm_pending(p["id"], p["message_id"])
-            qty = q["qty"] or (int(q["amount"] // price) if q["amount"] else None)
+            qty = q["qty"] or (eng._qty(q["amount"] / price) if q["amount"] else None)
             if not qty:
                 return f"Kaç lot aldın? Örnek: <code>{sym} aldım 500 lot {price:.2f}</code> veya <code>{sym} aldım 50 bin</code>"
             if eng.db.position(sym):

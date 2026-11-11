@@ -56,7 +56,9 @@ def parse(text: str, universe: list[str]) -> dict:
             continue
         before = text[max(0, m.start() - 8):m.start()].lower()
         if unit.startswith(("lot", "adet", "tane", "hisse", "pay")):
-            out["qty"] = int(val)
+            out["qty"] = int(val) if float(val).is_integer() else val
+        elif unit.upper() in uni:  # "0,0137 btc"
+            out["qty"] = val
         elif unit.startswith(("bin", "k")):
             out["amount"] = val * 1000
         elif unit.startswith(("tl", "lira", "₺")) and val >= 1000:
@@ -65,6 +67,9 @@ def parse(text: str, universe: list[str]) -> dict:
             out["price"] = val
         elif val >= 5000 and out["amount"] is None:
             out["amount"] = val
+            out["_bare"] = True
         elif out["price"] is None:
             out["price"] = val
+    if out.pop("_bare", False) and out["qty"] and out["price"] is None:
+        out["price"], out["amount"] = out["amount"], None  # "0,0137 btc 3.500.000" -> fiyat
     return out

@@ -35,8 +35,33 @@ class Engine:
         self._news_ts = 0.0
         self.start_cash = float(cfg.raw.get("starting_cash", 100000))
         self._signals_this_check = 0
+        self.kripto = cfg.raw.get("market") == "kripto"
+        self.venue_at = "Midas Kripto'da" if self.kripto else "Midas'ta"
+        self.venue = "Midas Kripto" if self.kripto else "Midas"
+        self.cb = "k" if self.kripto else ""          # Telegram buton öneki (iki bot karışmasın)
+        self.close_check = None                        # dışarıdan kapanış saati kuralı
+        self.buy_window = None                         # dışarıdan alım saatleri kuralı
+        self.range_df_fn = self.daily_fn               # günlük oynaklık için tablo
 
     # ======================================================== yardımcılar
+    def _tick(self, price: float) -> float:
+        if self.kripto:  # ~5 anlamlı basamak
+            return 10 ** (math.floor(math.log10(max(price, 1e-9))) - 4)
+        return tick(price)
+
+    def _round(self, price: float) -> float:
+        t = self._tick(price)
+        dec = max(2, -int(math.floor(math.log10(t)))) if t < 1 else 2
+        return round(round(price / t) * t, dec)
+
+    def _qty(self, x: float):
+        if self.kripto:
+            return math.floor(float(x) * 1e6) / 1e6
+        return int(x)
+
+    def qs(self, qty) -> str:
+        return f"{qty:.6g} adet" if self.kripto else f"{qty} lot"
+
     @property
     def paused(self) -> bool:
         return bool(self.db.get("paused", False))
@@ -99,15 +124,15 @@ class Engine:
         g = self.cfg.raw.get("gunici", {})
         value = max(1.0, price * qty)
         if g.get("target_tl"):
-            tp = g["target_tl"] / value * 100
+            tp = g["target_tl"] / value * 100 + 2 * g.get("fee_pct", 0.0)
         else:
             tp = g.get("target_pct", 1.2)
         tp = max(g.get("min_target_pct", 0.6), min(tp, g.get("max_target_pct", 2.0)))
         sp = tp * g.get("stop_ratio", 0.8)
-        t = tick(price)
+        t = self._tick(price)
         target = math.ceil(price * (1 + tp / 100) / t) * t
         stop = math.floor(price * (1 - sp / 100) / t) * t
-        return round(stop, 2), round(target, 2), tp
+        return self._round(stop), self._round(target), tp
 
     def stretch_target(self, symbol: str, price: float, t1: float) -> float:
         """2. hedef: hisse güçlüyse buraya kadar bekletilir (en fazla %3, hissenin günlük oynaklığına göre)."""
@@ -115,15 +140,15 @@ class Engine:
         cap = g.get("stretch_max_pct", 3.0)
         rng = self.avg_range_pct(symbol) * g.get("stretch_range_share", 0.8)
         pct = max((t1 / price - 1) * 100, min(cap, rng or cap))
-        t = tick(price)
-        return round(math.ceil(price * (1 + pct / 100) / t) * t, 2)
+        t = self._tick(price)
+        return self._round(math.ceil(price * (1 + pct / 100) / t) * t)
 
     def _t1_key(self, symbol: str) -> str:
         return f"t1:{symbol}"
 
     def avg_range_pct(self, symbol: str) -> float:
         """Son 20 günde günlük ortalama (en yüksek - en düşük) / açılış, %."""
-        df = self.daily_fn(symbol)
+        df = self.range_df_fn(symbol)
         if df is None or len(df) < 21:
             return 0.0
         d = df.iloc[-21:-1]
@@ -134,6 +159,8 @@ class Engine:
         return self.avg_range_pct(symbol) >= target_pct * need
 
     def close_time_reached(self) -> bool:
+        if self.close_check is not None:
+            return bool(self.close_check())
         if not self.daytrade:
             return False
         h, m = map(int, self.cfg.raw.get("gunici", {}).get("close_at", "17:30").split(":"))
@@ -161,6 +188,11 @@ class Engine:
         if not self.cfg.raw.get("use_market_filter", True):
             return True
         idx = self.daily_fn(self.cfg.raw.get("market_index", "XU100"))
+        if self.kripto:
+            if idx is None or len(idx) < 25:
+                return True
+            chg = (float(idx["Close"].iloc[-1]) / float(idx["Close"].iloc[-25]) - 1) * 100
+            return chg > -self.cfg.raw.get("gunici", {}).get("max_index_drop_pct", 3.0)
         if self.daytrade:
             # Günlük al-sat: sadece BUGÜN endeks sert düşüyorsa alım yapma
             if idx is None or len(idx) < 2:
@@ -205,6 +237,10 @@ class Engine:
     def try_buy(self, sc: Score) -> str | None:
         if self.db.position(sc.symbol) or self._has_pending(sc.symbol):
             return None
+        if self.kripto:  # puan saatlik kapanmış mumlardan; giriş fiyatı anlık olsun
+            live = self.prices_fn([sc.symbol]).get(sc.symbol)
+            if live:
+                sc.price = live
         ok, why = self.can_open_new()
         if not ok:
             return why
@@ -214,9 +250,9 @@ class Engine:
             slots = max(1, g.get("max_concurrent", 1) - len(self.db.positions())
                         - sum(1 for p in self.db.open_pendings() if p["side"] == "BUY"))
             budget = self.free_cash() * (1 - g.get("cash_buffer_pct", 0.5) / 100) / slots
-            qty = int(budget // sc.price)
+            qty = self._qty(budget / sc.price)
             plan = None
-            if qty >= 1:
+            if qty > 0 and qty * sc.price >= g.get("min_order_tl", 50):
                 stop, target, tp = self.day_levels(sc.price, qty)
                 if not self.reachable(sc.symbol, tp):
                     return f"{sc.symbol}: günlük hareketi hedef için yetersiz"
@@ -237,8 +273,8 @@ class Engine:
             self.tg.send(self._buy_text(sc, plan, res.price, filled=True))
         elif res.status == "PENDING":
             mid = self.tg.send(self._buy_text(sc, plan, sc.price, filled=False, pid=res.pending_id),
-                               buttons=[[("✅ Midas'ta aldım", f"ok:{res.pending_id}"),
-                                         ("❌ Geç", f"no:{res.pending_id}")]])
+                               buttons=[[(f"✅ {self.venue_at} aldım", f"{self.cb}ok:{res.pending_id}"),
+                                         ("❌ Geç", f"{self.cb}no:{res.pending_id}")]])
             if mid:
                 self.db.set_pending_message(res.pending_id, mid)
         else:
@@ -261,8 +297,8 @@ class Engine:
         elif res.status == "PENDING":
             pnl = (price - pos["entry_price"]) * pos["qty"]
             mid = self.tg.send(self._sell_text(pos, price, pnl, reason, filled=False, pid=res.pending_id),
-                               buttons=[[("✅ Midas'ta sattım", f"ok:{res.pending_id}"),
-                                         ("❌ Tutmaya devam", f"no:{res.pending_id}")]])
+                               buttons=[[(f"✅ {self.venue_at} sattım", f"{self.cb}ok:{res.pending_id}"),
+                                         ("❌ Tutmaya devam", f"{self.cb}no:{res.pending_id}")]])
             if mid:
                 self.db.set_pending_message(res.pending_id, mid)
         else:
@@ -276,7 +312,7 @@ class Engine:
         self.db.set_pending_status(pid, "DONE")
         self.record_fill(p["side"], p["symbol"], p["qty"], p["price"], p["stop"], p["target"], p["reason"])
         word = "ALINDI" if p["side"] == "BUY" else "SATILDI"
-        txt = (f"✅ <b>{p['symbol']}</b> {p['qty']} lot @ {tl(p['price'])} {word} "
+        txt = (f"✅ <b>{p['symbol']}</b> {self.qs(p['qty'])} @ {tl(p['price'])} {word} "
                f"(kayıt no {pid}).\nFarklı fiyattan dolduysa: /fiyat {pid} YENİ_FİYAT")
         if p["side"] == "BUY":
             txt += self.limit_hint(p["symbol"], p["qty"], p["target"])
@@ -330,10 +366,10 @@ class Engine:
             self.db.set(f"locked:{symbol}", False)
         else:
             a, r = self._eff(price, atr_val)
-            stop = round_tick(price - r["stop_loss_atr"] * a)
-            target = round_tick(price + r["take_profit_atr"] * a)
+            stop = self._round(price - r["stop_loss_atr"] * a)
+            target = self._round(price + r["take_profit_atr"] * a)
         self.record_fill("BUY", symbol, qty, price, stop, target, "Manuel alım")
-        return (f"✅ <b>{symbol}</b> {qty} lot @ {tl(price)} takibe alındı.\n"
+        return (f"✅ <b>{symbol}</b> {self.qs(qty)} @ {tl(price)} takibe alındı.\n"
                 + self.levels_text(symbol, price, qty, stop, target)
                 + self.limit_hint(symbol, qty, target))
 
@@ -351,7 +387,7 @@ class Engine:
         pos = self.db.position(symbol)
         if not pos:
             return "Bu hisse takipte değil"
-        qty = int(qty or pos["qty"])
+        qty = self._qty(qty or pos["qty"])
         price = float(price or pos["entry_price"])
         old_cost = pos["qty"] * pos["entry_price"]
         self.db.add_cash(old_cost - qty * price, self.start_cash)
@@ -361,20 +397,20 @@ class Engine:
             self.db.set(self._t1_key(symbol), t1)
             self.db.set(f"locked:{symbol}", False)
         else:
-            stop = round_tick(pos["stop"] + (price - pos["entry_price"]))
-            target = round_tick(pos["target"] + (price - pos["entry_price"]))
+            stop = self._round(pos["stop"] + (price - pos["entry_price"]))
+            target = self._round(pos["target"] + (price - pos["entry_price"]))
         self.db._exec("UPDATE positions SET qty=?, entry_price=?, stop=?, target=?, highest=? WHERE symbol=?",
                       (qty, price, stop, target, price, symbol))
         self.db._exec("UPDATE trades SET qty=?, price=? WHERE id=(SELECT MAX(id) FROM trades WHERE symbol=? AND side='BUY')",
                       (qty, price, symbol))
-        return (f"✏️ <b>{symbol}</b> düzeltildi: {qty} lot @ {tl(price)}\n"
+        return (f"✏️ <b>{symbol}</b> düzeltildi: {self.qs(qty)} @ {tl(price)}\n"
                 + self.levels_text(symbol, price, qty, stop, target)
                 + self.limit_hint(symbol, qty, target))
 
     def update_pending_fill(self, pid: int, qty: int | None, price: float | None) -> None:
         """Onaydan önce gerçek fiyat/lotu yaz ve seviyeleri ona göre yeniden hesapla."""
         p = self.db.pending(pid)
-        qty = int(qty or p["qty"])
+        qty = self._qty(qty or p["qty"])
         price = float(price or p["price"])
         stop, target = p["stop"], p["target"]
         if self.daytrade and p["side"] == "BUY":
@@ -398,8 +434,8 @@ class Engine:
                          "Artık zararla çıkma ihtimalin yok.", True))
         locked = bool(self.db.get(f"locked:{sym}"))
         if (price >= t1 or locked) and t1 < pos["target"]:
-            lock = round_tick(entry + g.get("lock_share", 0.65) * (t1 - entry))
-            trail = round_tick(hi * (1 - g.get("trail_after_t1_pct", 0.6) / 100))
+            lock = self._round(entry + g.get("lock_share", 0.65) * (t1 - entry))
+            trail = self._round(hi * (1 - g.get("trail_after_t1_pct", 0.6) / 100))
             stop = max(stop, lock, trail)
             if not locked:
                 self.db.set(f"locked:{sym}", True)
@@ -474,13 +510,17 @@ class Engine:
             if self.daytrade:
                 lines.append(f"• Hiçbiri olmazsa {self.cfg.raw.get('gunici', {}).get('close_at', '17:30')}'da sat.")
         if not live:
-            ex = f"{round_tick(px * 1.003):.2f}".replace(".", ",")
-            lines.append(f"\nMidas'taki anlık fiyatı yazarsan (ör. <code>{ex}</code>) ona göre söylerim.")
+            ex = f"{self._round(px * 1.003):.2f}".replace(".", ",")
+            lines.append("" if self.kripto else f"\n{self.venue}'taki anlık fiyatı yazarsan (ör. <code>{ex}</code>) ona göre söylerim.")
         return "\n".join(lines)
 
     def limit_hint(self, symbol: str, qty: int, target: float) -> str:
         if not self.daytrade:
             return ""
+        if self.kripto:
+            return (f"\n\n👉 Midas Kripto'da limit satış varsa <b>{tl(target)}</b>'den {qty:.6g} {symbol} için satış emri gir.\n"
+                    "Kripto fiyatını anlık görüyorum: 1. hedef gelince zarar kesi kâra çekerim, geri dönerse 'SAT' derim. "
+                    "Satınca bana 'sattım' yaz.")
         return (f"\n\n👉 <b>Midas'ta 2. hedefe LİMİT SATIŞ gir:</b> {symbol} → Sat → Limit {tl(target)} → {qty} adet. "
                 "Fiyat oraya fırlarsa Midas anında satar.\n"
                 "1. hedef gelince sana yazıp zarar kesi kâra çekeceğim; fiyat geri dönerse "
@@ -512,13 +552,15 @@ class Engine:
         eq = self.equity()
         self.db.set(self._day_key(), eq)
         mood = self.news.market_mood()
-        mkt = "✅ alıma uygun" if self.market_is_ok() else ("⛔ BIST 100 bugün sert düşüşte" if self.daytrade else "⛔ endeks zayıf, yeni alım yok")
+        mkt = "✅ alıma uygun" if self.market_is_ok() else ("⛔ Bitcoin son 24 saatte sert düştü" if self.kripto else "⛔ BIST 100 bugün sert düşüşte" if self.daytrade else "⛔ endeks zayıf, yeni alım yok")
         th = self.cfg.strategy["buy_threshold"]
         top_n = 5 if self.plan_mode else 10
-        lines = [f"☀️ <b>Günaydın Mert — {now():%d.%m.%Y} BIST planı</b>",
+        head = (f"🌆 <b>İyi akşamlar Mert — {now():%d.%m.%Y} kripto planı</b>" if self.kripto
+                else f"☀️ <b>Günaydın Mert — {now():%d.%m.%Y} BIST planı</b>")
+        lines = [head,
                  f"Piyasa: {mkt} | Haber havası: {mood:+.2f}",
                  f"Sermaye: {tl(eq)} | Nakit: {tl(self.cash())}", "",
-                 f"<b>En güçlü {top_n} hisse</b> (alım eşiği {th}):"]
+                 f"<b>En güçlü {top_n} {'coin' if self.kripto else 'hisse'}</b> (alım eşiği {th}):"]
         for s in scores[:top_n]:
             mark = "🟢" if s.total >= th else "⚪"
             lines.append(f"{mark} <b>{s.symbol}</b> {s.total:.0f} puan — {tl(s.price)}"
@@ -535,7 +577,7 @@ class Engine:
             max_new = int(self.cfg.raw.get("gunici", {}).get("max_concurrent", 1))
         ok, why = self.can_open_new()
         if not self.market_is_ok():
-            lines += ["", "📌 <b>Bugün alım yok</b> — " + ("BIST 100 bugün sert düşüyor." if self.daytrade else "endeks zayıf.")
+            lines += ["", "📌 <b>Bugün alım yok</b> — " + ("Bitcoin sert düşüşte." if self.kripto else "BIST 100 bugün sert düşüyor." if self.daytrade else "endeks zayıf.")
                       + " Sadece elindekileri takip ediyorum."]
             buys = []
         elif not ok:
@@ -544,10 +586,14 @@ class Engine:
         elif not buys:
             lines += ["", "📌 <b>Bugün alım yok</b> — eşiği geçen hisse çıkmadı."]
         else:
-            lines += ["", f"📌 <b>Bugünün alım planı: {min(len(buys), max_new)} hisse</b> (aşağıda). "
-                          "Gün içinde başka alım önermeyeceğim, sadece satış uyarısı gelir."]
+            lines += ["", f"📌 <b>{'Bu akşamın' if self.kripto else 'Bugünün'} alım planı: {min(len(buys), max_new)} {'coin' if self.kripto else 'hisse'}</b> (aşağıda). "
+                          + ("Sattıktan sonra uygun fırsat çıkarsa yenisini öneririm." if self.daytrade
+                             else "Gün içinde başka alım önermeyeceğim, sadece satış uyarısı gelir.")]
         self.tg.send("\n".join(lines))
         self.db.set(f"morning_done:{now().date().isoformat()}", True)
+        if self.kripto and self.cash() < 100:
+            self.tg.send("💰 Kripto bakiyeni bilmiyorum. Midas Kripto'ya ne kadar koyduysan yaz: <code>/kriptonakit 48000</code>")
+            return
         sent = 0
         for sc in buys:
             if sent >= max_new:
@@ -557,6 +603,9 @@ class Engine:
                 sent += 1
             elif "limit" in msg or "durduruldu" in msg or "Maksimum" in msg:
                 break
+        if buys and sent == 0:
+            self.tg.send("📌 Eşiği geçenler var ama hiçbirinin günlük hareketi hedef için yeterli değil "
+                         "(ya da bakiye yetmiyor). Şimdilik alım yok, fırsat çıkarsa yazarım.")
 
     def intraday(self, allow_buys: bool = True) -> None:
         self._signals_this_check = 0
@@ -648,10 +697,14 @@ class Engine:
 
     def day_reentry(self) -> None:
         g = self.cfg.raw.get("gunici", {})
-        h, m = map(int, g.get("reentry_until", "16:00").split(":"))
         t = now()
-        if t >= t.replace(hour=h, minute=m, second=0, microsecond=0) or self.close_time_reached():
-            return
+        if self.buy_window is not None:
+            if not self.buy_window() or self.close_time_reached():
+                return
+        else:
+            h, m = map(int, g.get("reentry_until", "16:00").split(":"))
+            if t >= t.replace(hour=h, minute=m, second=0, microsecond=0) or self.close_time_reached():
+                return
         if not self.db.get(f"morning_done:{t.date().isoformat()}"):
             return
         busy = len(self.db.positions()) + sum(1 for p in self.db.open_pendings() if p["side"] == "BUY")
@@ -659,8 +712,15 @@ class Engine:
             return
         bought_today = {x["symbol"] for x in self.db.trades_today() if x["side"] == "BUY"}
         buys_today = len(bought_today)
-        if buys_today >= g.get("max_trades_per_day", 3) or not buys_today:
-            return  # sabah hiç alım yapılmadıysa gün içinde de başlatma
+        if buys_today >= g.get("max_trades_per_day", 3):
+            return
+        if not buys_today and not self.kripto:
+            return  # BIST: sabah hiç alım yapılmadıysa gün içinde de başlatma
+        if self.kripto:  # kripto: elde coin yokken en fazla 20 dakikada bir tara
+            last = self.db.get("last_rescan", 0)
+            if time.time() - float(last) < 20 * 60:
+                return
+            self.db.set("last_rescan", time.time())
         if not self.market_is_ok():
             return
         scores = self.scan(refresh_news=True)
@@ -670,7 +730,6 @@ class Engine:
                 break
             if sc.symbol in bought_today:
                 continue
-            self.tg.send("🔁 Önceki hisse satıldı, sıradaki fırsat:")
             msg = self.try_buy(sc)
             if not msg:
                 return
@@ -690,7 +749,7 @@ class Engine:
         for t in trades:
             icon = "🟢 AL" if t["side"] == "BUY" else "🔴 SAT"
             extra = f" | K/Z {tl(t['pnl'])}" if t["side"] == "SELL" else ""
-            lines.append(f"{icon} {t['symbol']} {t['qty']} lot @ {tl(t['price'])}{extra}")
+            lines.append(f"{icon} {t['symbol']} {self.qs(t['qty'])} @ {tl(t['price'])}{extra}")
         lines += ["", self.portfolio_text(prices)]
         self.tg.send("\n".join(lines))
 
@@ -705,16 +764,16 @@ class Engine:
         for p in pos:
             px = prices.get(p["symbol"], p["entry_price"])
             pct = (px / p["entry_price"] - 1) * 100
-            lines.append(f"{'📈' if pct >= 0 else '📉'} <b>{p['symbol']}</b> {p['qty']} lot | "
+            lines.append(f"{'📈' if pct >= 0 else '📉'} <b>{p['symbol']}</b> {self.qs(p['qty'])} | "
                          f"maliyet {tl(p['entry_price'])} → {tl(px)} ({pct:+.2f}%)\n"
                          f"    stop {tl(p['stop'])} | hedef {tl(p['target'])}")
         lines.append(f"Nakit: {tl(self.cash())} | Toplam: {tl(self.equity(prices))}")
         return "\n".join(lines)
 
     def _buy_text(self, sc: Score, plan, price, filled: bool, pid=None) -> str:
-        head = "🟢 <b>ALINDI</b>" if filled else "🟢 <b>AL SİNYALİ — Midas'ta gir</b>"
+        head = "🟢 <b>ALINDI</b>" if filled else f"🟢 <b>AL SİNYALİ — {self.venue_at} gir</b>"
         txt = (f"{head}: <b>{sc.symbol}</b>\n"
-               f"Lot: <b>{plan.qty}</b> | Fiyat: <b>{tl(price)}</b> | Tutar: {tl(plan.qty * price)}\n"
+               f"Miktar: <b>{self.qs(plan.qty)}</b> | Fiyat: <b>{tl(price)}</b> | Tutar: {tl(plan.qty * price)}\n"
                + self.levels_text(sc.symbol, price, plan.qty, plan.stop, plan.target) +
                f"Puan: {sc.total:.0f}/100 ({sc.summary()})")
         if sc.notes:
@@ -722,15 +781,16 @@ class Engine:
         if self.daytrade:
             txt += f"\n⏰ Günlük al-sat: hedef/stop olmazsa {self.cfg.raw.get('gunici', {}).get('close_at', '17:30')}'da sat."
         if not filled:
-            txt += (f"\n\nMidas → {sc.symbol} → Al → Limit {tl(price)} → {plan.qty} adet."
-                    f"\nEmir gerçekleşince ✅'ye bas ya da 'aldım' yaz. (no {pid})")
+            txt += ((f"\n\nMidas Kripto → {sc.symbol} → Al → <b>{tl(plan.cost)}</b> tutarında (≈ {plan.qty:.6g} {sc.symbol})."
+                     if self.kripto else f"\n\nMidas → {sc.symbol} → Al → Limit {tl(price)} → {plan.qty} adet.")
+                    + f"\nEmir gerçekleşince ✅'ye bas ya da 'aldım' yaz. (no {pid})")
         return txt
 
     def _sell_text(self, pos, price, pnl, reason, filled: bool, pid=None) -> str:
-        head = "🔴 <b>SATILDI</b>" if filled else "🔴 <b>SAT SİNYALİ — Midas'ta sat</b>"
+        head = "🔴 <b>SATILDI</b>" if filled else f"🔴 <b>SAT SİNYALİ — {self.venue_at} sat</b>"
         pct = (price / pos["entry_price"] - 1) * 100
-        txt = (f"{head}: <b>{pos['symbol']}</b> {pos['qty']} lot @ {tl(price)}\n"
+        txt = (f"{head}: <b>{pos['symbol']}</b> {self.qs(pos['qty'])} @ {tl(price)}\n"
                f"Sebep: {escape(reason)}\nKâr/Zarar: {tl(pnl)} ({pct:+.2f}%)")
         if not filled:
-            txt += f"\n\nMidas → {pos['symbol']} → Sat → {pos['qty']} adet. Sonra ✅'ye bas. (no {pid})"
+            txt += f"\n\n{self.venue} → {pos['symbol']} → Sat → {self.qs(pos['qty'])} (tamamı). Sonra ✅'ye bas. (no {pid})"
         return txt

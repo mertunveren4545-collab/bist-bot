@@ -376,3 +376,68 @@ def test_advice_messages(cfg, tmp_path):
     prices["YKBNK"] = 38.30  # gecikmeli veri eski; kullanıcının fiyatı geçerli
     assert "BEKLE" in real.text_handler("satayım mı")
     assert "SAT" in real.text_handler("38,40 geriledi ne yapayım").split("BEKLE")[0]
+
+
+def kripto_engine(tmp_path, price=3_500_000.0):
+    from bot.config import ROOT
+    kcfg = load_config(ROOT / "kripto.yaml")
+    kcfg.raw["universe"] = ["BTC", "ETH"]
+    kcfg.raw["use_market_filter"] = False
+    kcfg.raw["strategy"]["buy_threshold"] = 1
+    kcfg.raw["gunici"]["range_multiple"] = 0.1
+    frames = {s: make_df(300, 0.002, seed=i) * (price / 100 if s == "BTC" else 1300) for i, s in enumerate(["BTC", "ETH"])}
+    for f in frames.values():
+        f["Volume"] = 1e3
+    live = {s: float(f.Close.iloc[-1]) for s, f in frames.items()}
+    db = Storage(tmp_path / "k.db")
+    tg = FakeTG()
+    eng = Engine(kcfg, db, MidasManualBroker(db), tg, daily_fn=lambda s: frames.get(s),
+                 prices_fn=lambda syms: {s: live[s] for s in syms if s in live}, news=FakeNews())
+    eng.range_df_fn = lambda s: frames.get(s)
+    eng.buy_window = lambda: True
+    eng.close_check = lambda: False
+    return eng, db, tg, live, kcfg
+
+
+def test_kripto_fractional_plan(tmp_path):
+    eng, db, tg, live, kcfg = kripto_engine(tmp_path)
+    db.set("cash", 48000)
+    eng.morning()
+    b = [p for p in db.open_pendings() if p["side"] == "BUY"][0]
+    assert 0 < b["qty"] < 1  # küsuratlı coin
+    assert 47000 < b["qty"] * b["price"] <= 48000
+    t1 = db.get(f"t1:{b['symbol']}")
+    net = (t1 - b["price"]) * b["qty"] - 2 * 0.0015 * b["qty"] * b["price"]
+    assert 620 <= net <= 760  # komisyon sonrası ≈ 650 TL
+    assert b["stop"] < b["price"] < t1 <= b["target"]
+    msg = tg.sent[-1]
+    assert "Midas Kripto" in msg[0] and msg[1][0][0][1].startswith("kok:")
+
+
+def test_kripto_force_close_and_routing(tmp_path):
+    eng, db, tg, live, kcfg = kripto_engine(tmp_path)
+    db.set("cash", 48000)
+    eng.manual_buy("ETH", 0.5, live["ETH"])
+    eng.close_check = lambda: True  # sabah 09:00
+    eng.intraday()
+    s = [p for p in db.open_pendings() if p["side"] == "SELL"]
+    assert s and "Gün sonu" in s[0]["reason"]
+
+
+def test_crypto_windows():
+    import run_once as r
+    from datetime import datetime
+    from bot.config import ROOT, TZ
+    cfg = load_config(); kcfg = load_config(ROOT / "kripto.yaml")
+    d = lambda s: datetime.fromisoformat(s).replace(tzinfo=TZ)
+    assert r.bist_open(cfg, d("2026-11-11T11:00"))           # çarşamba gündüz BIST
+    assert not r.crypto_active(cfg, d("2026-11-11T11:00"))
+    assert r.crypto_buy_window(cfg, kcfg, d("2026-11-11T19:00"))  # akşam alım
+    assert not r.crypto_buy_window(cfg, kcfg, d("2026-11-12T02:00"))  # gece sadece takip
+    assert r.crypto_active(cfg, d("2026-11-12T02:00"))
+    assert r.crypto_force_close(cfg, kcfg, d("2026-11-12T09:10"))
+    assert r.crypto_buy_window(cfg, kcfg, d("2026-11-14T11:00"))  # cumartesi gündüz
+    assert not r.crypto_force_close(cfg, kcfg, d("2026-11-14T09:10"))
+    assert r.crypto_buy_window(cfg, kcfg, d("2027-10-29T11:00"))  # 29 Ekim tatil
+    assert r.bist_open(cfg, d("2027-10-28T11:00")) and not r.bist_open(cfg, d("2027-10-28T13:00"))  # arife
+    assert r.crypto_buy_window(cfg, kcfg, d("2027-10-28T13:00"))

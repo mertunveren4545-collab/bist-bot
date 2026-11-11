@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 data/bot.log*
 data/*.db-journal
+
+data/*.db
