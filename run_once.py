@@ -127,6 +127,12 @@ def main() -> None:
         db.set(eng._day_key(), amount)
         log.info("Nakit %.0f olarak ayarlandı", amount)
 
+    if os.getenv("MESAJ", "").strip():
+        # Elle tetiklemede Telegram'a yazılmış gibi bir mesaj işlet (düzeltmeler için)
+        reply = tg.text_handler(os.getenv("MESAJ"))
+        if reply:
+            tg.send(reply)
+
     if gorev == "sabah":
         db.set("tg_offset", tg.poll_once(int(db.get("tg_offset", 0))))
         log.info("Sabah planı (elle)")

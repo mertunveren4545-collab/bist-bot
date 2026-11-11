@@ -55,7 +55,7 @@ def parse(text: str, universe: list[str]) -> dict:
         except ValueError:
             continue
         before = text[max(0, m.start() - 8):m.start()].lower()
-        if unit.startswith(("lot", "adet", "tane")):
+        if unit.startswith(("lot", "adet", "tane", "hisse", "pay")):
             out["qty"] = int(val)
         elif unit.startswith(("bin", "k")):
             out["amount"] = val * 1000

@@ -193,11 +193,26 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
     def _text(text: str):
         q = parse(text, cfg.universe)
         sym = q["symbol"]
+        derived = False
+        if q["price"] is None and q["amount"] and q["qty"]:
+            q["price"] = round(q["amount"] / q["qty"], 2)
+            derived = True
+        today = now().date().isoformat()
+        todays = [p for p in eng.db.positions() if p["opened_at"].startswith(today)]
         # "aldım" / "sattım" tek başına: bekleyen tek sinyali onayla
         if q["action"] and not sym:
             pend = [p for p in eng.db.open_pendings() if p["side"] == q["action"]]
             if len(pend) == 1:
+                if q["action"] == "BUY":
+                    eng.update_pending_fill(pend[0]["id"], q["qty"], q["price"])
                 return eng.confirm_pending(pend[0]["id"], pend[0]["message_id"])
+            if q["action"] == "BUY" and len(todays) == 1 and (q["price"] or q["qty"]):
+                return eng.correct_position(todays[0]["symbol"], q["qty"], q["price"])
+            if q["action"] == "SELL" and len(eng.db.positions()) == 1:
+                p0 = eng.db.positions()[0]
+                px = q["price"] or eng.prices_fn([p0["symbol"]]).get(p0["symbol"])
+                if px:
+                    return eng.manual_sell(p0["symbol"], px)
             return "Hangi hisse? Örnek: <code>ALARK aldım 53 bin</code> veya <code>ALARK sattım 107,30</code>"
         if not sym:
             return ("Anlayamadım 🙂 Şöyle yazabilirsin:\n"
@@ -205,14 +220,21 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
                     "• <code>ALARK sattım 107,30</code>\n• <code>ALARK</code> (durum/hedef sorar)\n"
                     "Tüm komutlar: /yardim")
         price = q["price"] or eng.prices_fn([sym]).get(sym)
+        pos_now = eng.db.position(sym)
+        # "YKBNK 1259 lot 38,10" gibi: eylem yazılmamış ama lot/tutar var
+        if not q["action"] and (q["qty"] or q["amount"]):
+            q["action"] = "BUY"
+        if q["action"] == "BUY" and pos_now and pos_now["opened_at"].startswith(today):
+            return eng.correct_position(sym, q["qty"] or (int(q["amount"] // price) if q["amount"] and price else None),
+                                        None if derived else q["price"])
         if q["action"] == "BUY":
             if not price:
                 return f"{sym} fiyatı bulunamadı, fiyatı da yaz: <code>{sym} aldım 100 lot 25,40</code>"
             # bekleyen sinyal varsa onu onayla
             for p in eng.db.open_pendings():
                 if p["symbol"] == sym and p["side"] == "BUY":
-                    eng.db._exec("UPDATE pending SET price=?, qty=COALESCE(?, qty) WHERE id=?",
-                                 (price, q["qty"], p["id"]))
+                    qty = q["qty"] or (int(q["amount"] // price) if q["amount"] else None)
+                    eng.update_pending_fill(p["id"], qty, price)
                     return eng.confirm_pending(p["id"], p["message_id"])
             qty = q["qty"] or (int(q["amount"] // price) if q["amount"] else None)
             if not qty:
@@ -230,8 +252,10 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
         if pos:
             px = price or pos["entry_price"]
             pct = (px / pos["entry_price"] - 1) * 100
-            return (f"📌 <b>{sym}</b> {pos['qty']} lot | maliyet {tl(pos['entry_price'])} → {tl(px)} ({pct:+.2f}%)\n"
-                    f"🎯 Kâr al: {tl(pos['target'])}\n🛑 Zarar kes: {tl(pos['stop'])}" + daytrade_note())
+            return (f"📌 <b>{sym}</b> {pos['qty']} lot | maliyet {tl(pos['entry_price'])} → {tl(px)} "
+                    f"({pct:+.2f}%, ≈ {tl((px - pos['entry_price']) * pos['qty'])})\n"
+                    + eng.levels_text(sym, pos["entry_price"], pos["qty"], pos["stop"], pos["target"])
+                    + daytrade_note().lstrip("\n"))
         return _one([sym])
 
     def daytrade_note() -> str:

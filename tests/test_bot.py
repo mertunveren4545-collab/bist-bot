@@ -320,7 +320,7 @@ def test_text_messages(cfg, tmp_path):
     p0 = prices["ALARK"]
     r = real.text_handler("Alark aldım 53 binlik satış kac")
     assert db.position("ALARK")["qty"] == int(53000 // p0) and "Zarar kes" in r
-    assert "Kâr al" in real.text_handler("alark")
+    assert "hedef" in real.text_handler("alark")
     r = real.text_handler(f"ALARK sattım {p0 * 1.02:.2f}".replace(".", ","))
     assert db.position("ALARK") is None and "K/Z" in r
     assert "Anlayamadım" in real.text_handler("merhaba")
@@ -339,3 +339,23 @@ def test_daytrade_runs_to_stretch_target(cfg, tmp_path):
     sell = [p for p in db.open_pendings() if p["side"] == "SELL"]
     assert sell and "HEDEF" in sell[0]["reason"]
     assert (sell[0]["price"] - 100) * 500 > 1400  # ~%3 -> 1.500 TL
+
+
+def test_fill_corrections(cfg, tmp_path):
+    import main as m
+    eng, db, tg, prices = plan_engine(cfg, tmp_path, names=["YKBNK", "GARAN"])
+    cfg.raw["trade_style"] = "gunici"
+    cfg.raw["gunici"] = dict(GUN)
+    db.set("cash", 48000)
+    eng.morning()
+    pid = db.open_pendings()[0]["id"]
+    eng.confirm_pending(pid, 1)  # butona basıldı
+    real = Telegram("", "1")
+    m.register_commands(real, eng, cfg)
+    p0 = db.position("YKBNK")["entry_price"]
+    r = real.text_handler(f"{p0 * 0.99:.2f} den aldim".replace(".", ","))
+    assert "düzeltildi" in r and db.position("YKBNK")["entry_price"] == pytest.approx(round(p0 * 0.99, 2))
+    r = real.text_handler("Ykbnk 48 bin 1259 hisse")
+    pos = db.position("YKBNK")
+    assert pos["qty"] == 1259 and pos["entry_price"] == pytest.approx(round(p0 * 0.99, 2))
+    assert pos["stop"] < pos["entry_price"] < db.get("t1:YKBNK") <= pos["target"]

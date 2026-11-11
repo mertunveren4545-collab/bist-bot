@@ -346,6 +346,44 @@ class Engine:
         return (f"🎯 Kâr al: <b>{tl(target)}</b> (≈ +{tl((target - price) * qty)})\n"
                 f"🛑 Zarar kes: {tl(stop)} (≈ −{tl((price - stop) * qty)})\n")
 
+    def correct_position(self, symbol: str, qty: int | None, price: float | None) -> str:
+        """Gerçek dolum farklıysa pozisyonu (lot/fiyat) düzelt, seviyeleri yeniden hesapla."""
+        pos = self.db.position(symbol)
+        if not pos:
+            return "Bu hisse takipte değil"
+        qty = int(qty or pos["qty"])
+        price = float(price or pos["entry_price"])
+        old_cost = pos["qty"] * pos["entry_price"]
+        self.db.add_cash(old_cost - qty * price, self.start_cash)
+        if self.daytrade:
+            stop, t1 = self.day_levels(price, qty)[:2]
+            target = self.stretch_target(symbol, price, t1)
+            self.db.set(self._t1_key(symbol), t1)
+            self.db.set(f"locked:{symbol}", False)
+        else:
+            stop = round_tick(pos["stop"] + (price - pos["entry_price"]))
+            target = round_tick(pos["target"] + (price - pos["entry_price"]))
+        self.db._exec("UPDATE positions SET qty=?, entry_price=?, stop=?, target=?, highest=? WHERE symbol=?",
+                      (qty, price, stop, target, price, symbol))
+        self.db._exec("UPDATE trades SET qty=?, price=? WHERE id=(SELECT MAX(id) FROM trades WHERE symbol=? AND side='BUY')",
+                      (qty, price, symbol))
+        return (f"✏️ <b>{symbol}</b> düzeltildi: {qty} lot @ {tl(price)}\n"
+                + self.levels_text(symbol, price, qty, stop, target)
+                + self.limit_hint(symbol, qty, target))
+
+    def update_pending_fill(self, pid: int, qty: int | None, price: float | None) -> None:
+        """Onaydan önce gerçek fiyat/lotu yaz ve seviyeleri ona göre yeniden hesapla."""
+        p = self.db.pending(pid)
+        qty = int(qty or p["qty"])
+        price = float(price or p["price"])
+        stop, target = p["stop"], p["target"]
+        if self.daytrade and p["side"] == "BUY":
+            stop, t1 = self.day_levels(price, qty)[:2]
+            target = self.stretch_target(p["symbol"], price, t1)
+            self.db.set(self._t1_key(p["symbol"]), t1)
+        self.db._exec("UPDATE pending SET qty=?, price=?, stop=?, target=? WHERE id=?",
+                      (qty, price, stop, target, pid))
+
     def limit_hint(self, symbol: str, qty: int, target: float) -> str:
         if not self.daytrade:
             return ""

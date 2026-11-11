@@ -13,6 +13,10 @@ on:
         default: dongu
         type: choice
         options: [dongu, otomatik, sabah, deneme]
+      mesaj:
+        description: "Bota yazılmış gibi işlenecek mesaj (ör. YKBNK 1259 lot 38,10 aldım)"
+        required: false
+        default: ""
       nakit:
         description: "İstersen Midas serbest bakiyeni yaz (ör. 53000)"
         required: false
@@ -53,6 +57,7 @@ jobs:
           GOREV: ${{ github.event.inputs.gorev || 'dongu' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NAKIT: ${{ github.event.inputs.nakit || '' }}
+          MESAJ: ${{ github.event.inputs.mesaj || '' }}
         run: python run_once.py
 
       - name: Durumu kaydet
