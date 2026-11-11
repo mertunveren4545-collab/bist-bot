@@ -80,7 +80,8 @@ def main() -> None:
         for p in db.open_pendings():
             if p["id"] not in before:
                 db.set_pending_status(p["id"], "EXPIRED")
-        db.set(f"done_m:{now().date().isoformat()}", True)
+        db.set(f"morning_done:{now().date().isoformat()}", False)  # deneme gerçek günü etkilemesin
+        db.set(eng._day_key(), eng.cash())
         return
 
     # 2) Zamanlanmış işler

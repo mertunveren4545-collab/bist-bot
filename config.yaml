@@ -18,7 +18,11 @@ max_new_per_day: 2
 #   swing  -> birkaç gün/hafta tut (ATR'ye göre stop/hedef)
 trade_style: gunici
 gunici:
-  target_tl: 650          # her işlemde hedef net kâr (TL). 53.000 TL'de ≈ %1,2
+  target_tl: 650          # 1. hedef: kâr (TL). Gelince SATILMAZ, zarar kes kâra çekilir
+  stretch_max_pct: 3.0    # 2. hedef: en fazla %3 (hissenin günlük oynaklığına göre daha az olabilir)
+  stretch_range_share: 0.8  # 2. hedef = hissenin ortalama günlük aralığının en fazla %80'i
+  lock_share: 0.65        # 1. hedef gelince kârın %65'i kilitlenir
+  trail_after_t1_pct: 0.6 # 1. hedeften sonra zarar kes, görülen en yüksek fiyatın %0,6 altında takip eder
   stop_ratio: 0.8         # zarar kes = hedef yüzdesinin 0,8 katı (≈ -520 TL)
   min_target_pct: 0.6     # hedef yüzdesi bu aralıkta tutulur
   max_target_pct: 2.0

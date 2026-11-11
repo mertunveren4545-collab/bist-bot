@@ -265,8 +265,10 @@ def test_daytrade_levels_and_close(cfg, tmp_path):
     cfg.raw["gunici"] = dict(GUN, close_at="00:00")
     eng.manual_buy("UP0", 500, 100.0)
     pos = db.position("UP0")
-    assert pos["target"] == pytest.approx(101.3) and pos["stop"] == pytest.approx(98.9)
-    assert (pos["target"] - 100) * 500 >= 649.9
+    t1 = db.get("t1:UP0")
+    assert t1 == pytest.approx(101.3) and pos["stop"] == pytest.approx(98.9)
+    assert (t1 - 100) * 500 >= 649.9
+    assert t1 <= pos["target"] <= 103.0 + 1e-9  # 2. hedef en fazla %3
     prices["UP0"] = 100.5
     eng.intraday()
     sells = [p for p in db.open_pendings() if p["side"] == "SELL"]
@@ -283,13 +285,23 @@ def test_daytrade_full_day_with_reentry(cfg, tmp_path):
     assert len(buys) == 1  # tüm parayla tek hisse
     b = buys[0]
     assert b["qty"] * b["price"] <= 53000 and b["qty"] * b["price"] > 52000
-    assert 640 <= (b["target"] - b["price"]) * b["qty"] <= 760
+    t1 = db.get(f"t1:{b['symbol']}")
+    assert 640 <= (t1 - b["price"]) * b["qty"] <= 760
+    assert b["target"] >= t1
     eng.confirm_pending(b["id"], 1)
     assert "LİMİT SATIŞ" in tg.edits[-1][1]
-    # hedef geldi -> sat sinyali
-    prices[b["symbol"]] = b["target"] + 0.1
+    # 1. hedef geldi -> SATMA, kârı kilitle
+    prices[b["symbol"]] = t1 + 0.05
+    eng.intraday()
+    assert not [p for p in db.open_pendings() if p["side"] == "SELL"]
+    pos = db.position(b["symbol"])
+    assert pos["stop"] > b["price"]  # kâr kilitli
+    assert any("1. hedefi gördü" in m for m, *_ in tg.sent)
+    # fiyat geri döndü -> kârla SAT
+    prices[b["symbol"]] = pos["stop"] - 0.05
     eng.intraday()
     sell = [p for p in db.open_pendings() if p["side"] == "SELL"][0]
+    assert "Kâr kilidi" in sell["reason"]
     eng.confirm_pending(sell["id"], 2)
     assert db.position(b["symbol"]) is None and eng.cash() > 53000
     # bir sonraki kontrolde yeni hisse önerilir (farklı bir hisse)
@@ -312,3 +324,18 @@ def test_text_messages(cfg, tmp_path):
     r = real.text_handler(f"ALARK sattım {p0 * 1.02:.2f}".replace(".", ","))
     assert db.position("ALARK") is None and "K/Z" in r
     assert "Anlayamadım" in real.text_handler("merhaba")
+
+
+def test_daytrade_runs_to_stretch_target(cfg, tmp_path):
+    eng, db, tg, prices = plan_engine(cfg, tmp_path)
+    cfg.raw["trade_style"] = "gunici"
+    cfg.raw["gunici"] = dict(GUN, stretch_max_pct=3.0, stretch_range_share=10, lock_share=0.65, trail_after_t1_pct=0.6)
+    eng.manual_buy("UP0", 500, 100.0)
+    pos = db.position("UP0")
+    assert pos["target"] == pytest.approx(103.0)
+    for px in (101.4, 102.2, 103.1):  # yükselmeye devam
+        prices["UP0"] = px
+        eng.intraday()
+    sell = [p for p in db.open_pendings() if p["side"] == "SELL"]
+    assert sell and "HEDEF" in sell[0]["reason"]
+    assert (sell[0]["price"] - 100) * 500 > 1400  # ~%3 -> 1.500 TL
