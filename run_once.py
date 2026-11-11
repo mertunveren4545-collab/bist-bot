@@ -178,6 +178,10 @@ def setup():
         keng.db.set(keng._day_key(), amount)
         return f"🪙 Kripto bakiyesi {amount:,.0f} ₺ olarak kaydedildi."
 
+    @tg.command("kriptotara")
+    def _kscan(args):
+        return crypto_scan_text(keng, kcfg)
+
     @tg.command("kriptoislemler")
     def _kt(args):
         return dummy.commands["islemler"]([])
@@ -199,6 +203,47 @@ def setup():
 
     tg.text_handler = route
     return cfg, db, tg, eng, kcfg, kdb, keng
+
+
+def crypto_scan_text(keng, kcfg) -> str:
+    """Şu an kripto için en uygun coinler + en iyisinin seviyeleri."""
+    from html import escape
+    from bot.engine import tl
+    scores = keng.scan(refresh_news=False)
+    if not scores:
+        return "⚠️ Kripto verisi alınamadı."
+    px = keng.prices_fn([s.symbol for s in scores])
+    th = kcfg.strategy["buy_threshold"]
+    lines = [f"🪙 <b>Kripto taraması — {now():%H:%M}</b>",
+             f"Piyasa: {'✅ alıma uygun' if keng.market_is_ok() else '⛔ Bitcoin son 24 saatte sert düştü'} | eşik {th}", ""]
+    best = None
+    for sc in scores[:6]:
+        df = keng.daily_fn(sc.symbol)
+        chg = (float(df.Close.iloc[-1]) / float(df.Close.iloc[-25]) - 1) * 100 if df is not None and len(df) > 25 else 0
+        rng = keng.avg_range_pct(sc.symbol)
+        live = px.get(sc.symbol, sc.price)
+        mark = "🟢" if sc.total >= th else "⚪"
+        lines.append(f"{mark} <b>{sc.symbol}</b> {sc.total:.0f} puan — {tl(live)} | 24s {chg:+.1f}% | günlük oynaklık %{rng:.1f}"
+                     + (f"\n    └ {escape('; '.join(sc.notes[:2])).replace('20 günlük', '20 saatlik')}" if sc.notes else ""))
+        if best is None and sc.total >= th:
+            best = (sc, live, rng)
+    cash = keng.cash() if keng.cash() >= 100 else 48000.0
+    if best:
+        sc, live, rng = best
+        qty = keng._qty(cash * 0.995 / live)
+        stop, t1, tp = keng.day_levels(live, qty)
+        t2 = keng.stretch_target(sc.symbol, live, t1)
+        ok = keng.reachable(sc.symbol, tp)
+        fee = 2 * kcfg.raw.get("gunici", {}).get("fee_pct", 0.15) / 100 * qty * live
+        lines += ["", f"👉 <b>En uygun: {sc.symbol}</b> ({tl(cash)} ile ≈ {qty:.6g} {sc.symbol})",
+                  f"🎯 1. hedef {tl(t1)} (net ≈ +{tl((t1 - live) * qty - fee)})",
+                  f"🚀 2. hedef {tl(t2)} (net ≈ +{tl((t2 - live) * qty - fee)}, %{(t2 / live - 1) * 100:.1f})",
+                  f"🛑 Zarar kes {tl(stop)} (≈ −{tl((live - stop) * qty + fee)})",
+                  "✅ Hareket alanı hedef için yeterli." if ok else "⚠️ Bu coinin günlük hareketi hedef için dar, dikkat."]
+    else:
+        lines += ["", "📌 Şu an eşiği geçen coin yok — beklemek daha iyi."]
+    lines.append("\nNot: Kripto planı her akşam 18:05'te kendiliğinden gelir.")
+    return "\n".join(lines)
 
 
 def claim_if_needed(db, tg) -> bool:
@@ -286,8 +331,14 @@ def main() -> None:
         db.set("cash", amount)
         db.set(eng._day_key(), amount)
     if os.getenv("MESAJ", "").strip():
-        reply = tg.text_handler(os.getenv("MESAJ"))
+        m = os.getenv("MESAJ").strip()
+        if m.startswith("/"):
+            fn = tg.commands.get(m[1:].split()[0].lower())
+            reply = fn(m.split()[1:]) if fn else None
+        else:
+            reply = tg.text_handler(m)
         if reply:
+            log.info("MESAJ cevabı:\n%s", reply)
             tg.send(reply)
 
     if gorev == "sabah":

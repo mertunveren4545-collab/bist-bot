@@ -76,6 +76,7 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
                 "/durdur — yeni alımları durdur  |  /devam — tekrar başlat\n\n"
                 "🪙 <b>Kripto (BIST kapalıyken)</b>\n"
                 "/kripto — kripto durumu (BEKLE/SAT)\n"
+                "/kriptotara — şu an en uygun coinler\n"
                 "/kriptonakit TUTAR — Midas Kripto bakiyen\n"
                 "/kriptoislemler — son kripto işlemleri\n"
                 "Normal yazı da olur: <code>BTC aldım 48 bin</code>, <code>ETH sattım</code>")
