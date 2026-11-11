@@ -101,7 +101,7 @@ risk:
 
 # ----------------- Zamanlama (İstanbul saati) -----------------
 schedule:
-  morning_scan: "10:20"          # günlük al-satta açılıştan sonra (veri ~15 dk gecikmeli)          # açılış öncesi tarama + Telegram'a günün listesi
+  morning_scan: "10:10"          # açılış fiyatı (09:55) verisi geldikten hemen sonra          # açılış öncesi tarama + Telegram'a günün listesi
   intraday_every_min: 10         # seans içinde kaç dakikada bir kontrol
   session_start: "10:00"
   session_end: "18:00"
