@@ -33,6 +33,7 @@ gunici:
   cash_buffer_pct: 0.5    # küsurat için nakitte bırakılacak pay
   stop_pct: 1.0           # (iz süren stop hesabı için)
   trail_pct: 1.5
+  max_index_drop_pct: 1.0 # BIST 100 bugün %1'den fazla düşüyorsa yeni alım yapma
   close_at: "17:30"    # bu saatte elde kalan her şey için SAT uyarısı
 
 # Her 15 dk'lık kontrolde, al/sat sinyali çıkmasa bile kısa bir durum mesajı gönder

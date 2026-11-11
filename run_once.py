@@ -67,6 +67,11 @@ def main() -> None:
         db.set("cash", amount)
         db.set(eng._day_key(), amount)
         log.info("Nakit %.0f olarak ayarlandı", amount)
+    if os.getenv("GOREV") == "sabah":
+        log.info("Sabah planı (elle)")
+        eng.morning()
+        db.set(f"done_m:{now().date().isoformat()}", True)
+        return
     if os.getenv("GOREV") == "deneme":
         log.info("Deneme sabah planı")
         if not eng.market_is_ok():

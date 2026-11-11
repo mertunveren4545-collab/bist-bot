@@ -160,7 +160,14 @@ class Engine:
     def market_is_ok(self) -> bool:
         if not self.cfg.raw.get("use_market_filter", True):
             return True
-        return market_ok(self.daily_fn(self.cfg.raw.get("market_index", "XU100")))
+        idx = self.daily_fn(self.cfg.raw.get("market_index", "XU100"))
+        if self.daytrade:
+            # Günlük al-sat: sadece BUGÜN endeks sert düşüyorsa alım yapma
+            if idx is None or len(idx) < 2:
+                return True
+            chg = (float(idx["Close"].iloc[-1]) / float(idx["Close"].iloc[-2]) - 1) * 100
+            return chg > -self.cfg.raw.get("gunici", {}).get("max_index_drop_pct", 1.0)
+        return market_ok(idx)
 
     # ======================================================== kayıt
     def record_fill(self, side, symbol, qty, price, stop=None, target=None, reason="") -> float:
@@ -373,7 +380,7 @@ class Engine:
         eq = self.equity()
         self.db.set(self._day_key(), eq)
         mood = self.news.market_mood()
-        mkt = "✅ alıma uygun" if self.market_is_ok() else "⛔ endeks zayıf, yeni alım yok"
+        mkt = "✅ alıma uygun" if self.market_is_ok() else ("⛔ BIST 100 bugün sert düşüşte" if self.daytrade else "⛔ endeks zayıf, yeni alım yok")
         th = self.cfg.strategy["buy_threshold"]
         top_n = 5 if self.plan_mode else 10
         lines = [f"☀️ <b>Günaydın Mert — {now():%d.%m.%Y} BIST planı</b>",
@@ -396,7 +403,8 @@ class Engine:
             max_new = int(self.cfg.raw.get("gunici", {}).get("max_concurrent", 1))
         ok, why = self.can_open_new()
         if not self.market_is_ok():
-            lines += ["", "📌 <b>Bugün alım yok</b> — endeks zayıf. Sadece elindekileri takip ediyorum."]
+            lines += ["", "📌 <b>Bugün alım yok</b> — " + ("BIST 100 bugün sert düşüyor." if self.daytrade else "endeks zayıf.")
+                      + " Sadece elindekileri takip ediyorum."]
             buys = []
         elif not ok:
             lines += ["", f"📌 <b>Bugün alım yok</b> — {why}."]

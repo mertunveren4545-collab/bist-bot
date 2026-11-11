@@ -10,7 +10,7 @@ on:
         description: "otomatik = saate göre normal çalışma, deneme = şimdi deneme sabah planı gönder"
         default: otomatik
         type: choice
-        options: [otomatik, deneme]
+        options: [otomatik, sabah, deneme]
       nakit:
         description: "İstersen Midas serbest bakiyeni yaz (ör. 53000)"
         required: false
