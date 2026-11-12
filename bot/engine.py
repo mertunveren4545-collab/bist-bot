@@ -749,9 +749,10 @@ class Engine:
         eq = self.equity(prices)
         start = self.day_start_equity(eq)
         realized = sum(t["pnl"] for t in trades if t["side"] == "SELL")
-        lines = [f"🌙 <b>Gün sonu raporu — {now():%d.%m.%Y}</b>",
+        lines = [f"🌙 <b>{'Kripto gece raporu' if self.kripto else 'Gün sonu raporu'} — {now():%d.%m.%Y}</b>",
                  f"Toplam değer: {tl(eq)} ({(eq - start) / start * 100 if start else 0:+.2f}% bugün)",
-                 f"Başlangıçtan beri: {(eq - self.start_cash) / self.start_cash * 100:+.2f}%",
+                 (f"Başlangıçtan beri: {(eq - self.start_cash) / self.start_cash * 100:+.2f}%"
+                  if self.start_cash else f"Toplam gerçekleşen kâr/zarar: {tl(sum(x['pnl'] for x in self.db.all_trades() if x['side'] == 'SELL'))}"),
                  f"Gerçekleşen kâr/zarar bugün: {tl(realized)}", "",
                  f"<b>Bugünkü işlemler ({len(trades)})</b>"]
         for t in trades:

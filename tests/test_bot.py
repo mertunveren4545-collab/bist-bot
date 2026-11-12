@@ -451,3 +451,12 @@ def test_kripto_unknown_cash_and_fees(tmp_path):
     t = [x for x in db.all_trades() if x["side"] == "SELL"][-1]
     assert t["pnl"] == pytest.approx(600 - 0.0015 * 0.3 * (162000 + 160000), abs=0.5)
     assert eng.cash() == pytest.approx(0.3 * 160000 * 1.0015 + t["pnl"], abs=1)
+
+
+def test_kripto_eod_no_start_cash(tmp_path):
+    eng, db, tg, live, kcfg = kripto_engine(tmp_path)
+    eng.start_cash = 0.0
+    eng.manual_buy("ETH", 0.3, 160000.0)
+    eng.manual_sell("ETH", 162000.0)
+    eng.eod()
+    assert "Kripto gece raporu" in tg.sent[-1][0]
