@@ -66,6 +66,7 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
                 "/tara — şimdi tara, en iyi 10 hisse\n"
                 "/hisse KOD — tek hissenin puan detayı\n"
                 "/haber KOD — son haberler ve skoru\n"
+                "/grafik KOD — çizgili grafik (destek, direnç, trend, hedefler)\n"
                 "/sat KOD — pozisyonu hemen kapat\n"
                 "/islemler — son 15 işlem\n"
                 "/rapor — gün sonu raporunu şimdi gönder\n"
@@ -116,6 +117,17 @@ def register_commands(tg: Telegram, eng: Engine, cfg) -> None:
         notes = "\n• ".join(sc.notes) if sc.notes else "-"
         return (f"🔍 <b>{code}</b> — {sc.total:.0f}/100 | {tl(sc.price)}\n{sc.summary()}\n"
                 f"ATR: {sc.atr:.2f}\n• {notes}")
+
+    @tg.command("grafik")
+    def _chart(args):
+        if not args:
+            return "Kullanım: /grafik THYAO"
+        code = args[0].upper()
+        pos = eng.db.position(code)
+        t1 = eng.db.get(eng._t1_key(code)) if pos else None
+        ok = eng.send_chart(code, pos["entry_price"] if pos else None, t1, pos["target"] if pos else None,
+                            pos["stop"] if pos else None)
+        return None if ok else f"{code} için grafik çizilemedi"
 
     @tg.command("haber")
     def _news(args):

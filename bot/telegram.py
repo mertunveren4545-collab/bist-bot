@@ -58,6 +58,18 @@ class Telegram:
             msg_id = (res.get("result") or {}).get("message_id", msg_id)
         return msg_id
 
+    def send_photo(self, png: bytes, caption: str = "", silent: bool = True) -> None:
+        if not self.enabled or not png:
+            log.info("[TELEGRAM KAPALI] foto: %s", caption)
+            return
+        try:
+            requests.post(f"{self.base}/sendPhoto",
+                          data={"chat_id": self.chat_id, "caption": caption[:1000], "parse_mode": "HTML",
+                                "disable_notification": silent},
+                          files={"photo": ("grafik.png", png, "image/png")}, timeout=60)
+        except Exception as e:
+            log.warning("Grafik gönderilemedi: %s", e)
+
     def edit(self, message_id: int, text: str) -> None:
         self._post("editMessageText", {"chat_id": self.chat_id, "message_id": message_id,
                                        "text": text, "parse_mode": "HTML"})

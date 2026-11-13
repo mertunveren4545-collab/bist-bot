@@ -385,6 +385,7 @@ def kripto_engine(tmp_path, price=3_500_000.0):
     kcfg.raw["use_market_filter"] = False
     kcfg.raw["strategy"]["buy_threshold"] = 1
     kcfg.raw["gunici"]["range_multiple"] = 0.1
+    kcfg.raw["strategy"]["weights"]["teknik"] = 0
     frames = {s: make_df(300, 0.002, seed=i) * (price / 100 if s == "BTC" else 1300) for i, s in enumerate(["BTC", "ETH"])}
     for f in frames.values():
         f["Volume"] = 1e3
@@ -460,3 +461,23 @@ def test_kripto_eod_no_start_cash(tmp_path):
     eng.manual_sell("ETH", 162000.0)
     eng.eod()
     assert "Kripto gece raporu" in tg.sent[-1][0]
+
+
+def test_ta_resistance_blocks_and_support_stop(cfg, tmp_path):
+    from types import SimpleNamespace
+    eng, db, tg, prices = plan_engine(cfg, tmp_path, names=["YKBNK", "GARAN"])
+    cfg.raw["trade_style"] = "gunici"; cfg.raw["gunici"] = dict(GUN)
+    sc = SimpleNamespace(ta=SimpleNamespace(resistance=100.8, resistance_hits=3, support=99.0, support_hits=2))
+    *_, why = eng.ta_adjust(sc, 100.0, 98.9, 101.3, 103.0)
+    assert why and "direnç" in why
+    sc.ta.resistance, sc.ta.resistance_hits = 102.5, 3
+    stop, t1, t2, why = eng.ta_adjust(sc, 100.0, 98.9, 101.3, 103.0)
+    assert why is None and t2 < 102.5 and t2 >= t1 and stop == pytest.approx(98.7, abs=0.06)
+
+
+def test_ta_analyze_directions():
+    from bot import ta
+    up = ta.analyze(make_df(300, 0.003, seed=5))
+    dn = ta.analyze(make_df(300, -0.003, seed=5))
+    assert up.score > dn.score
+    assert any("DÜŞÜŞ" in w or "bulutun altında" in w for w in dn.warnings)

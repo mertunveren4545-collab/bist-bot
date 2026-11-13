@@ -47,7 +47,7 @@ gunici:
 strategy:
   buy_threshold: 62
   sell_threshold: 35
-  weights: {trend: 35, momentum: 30, volume: 20, news: 15}
+  weights: {trend: 25, momentum: 20, volume: 15, news: 0, teknik: 40}
   rsi_overbought: 75
 
 risk:

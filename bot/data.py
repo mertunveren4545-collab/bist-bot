@@ -53,6 +53,33 @@ def daily(code: str, period: str = "2y", cache_sec: int = 3600) -> pd.DataFrame 
         return None
 
 
+_icache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+
+def intraday(code: str, interval: str = "15m", period: str = "5d", cache_sec: int = 180) -> pd.DataFrame | None:
+    """Gün içi 15 dk'lık mumlar (destek/direnç, VWAP, mum formasyonları için)."""
+    sym = yahoo_symbol(code)
+    hit = _icache.get(sym)
+    if hit and time.time() - hit[0] < cache_sec:
+        return hit[1]
+    try:
+        import yfinance as yf
+
+        df = yf.download(sym, period=period, interval=interval, progress=False, auto_adjust=True)
+        if df is None or df.empty:
+            return None
+        df = _clean(df)
+        try:
+            df.index = df.index.tz_convert("Europe/Istanbul")
+        except Exception:
+            pass
+        _icache[sym] = (time.time(), df)
+        return df
+    except Exception as e:
+        log.error("Gün içi veri hatası %s: %s", sym, e)
+        return None
+
+
 def last_prices(codes: list[str]) -> dict[str, float]:
     """Seans içi son fiyatlar (15 dk'lık mumlardan)."""
     out: dict[str, float] = {}

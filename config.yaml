@@ -85,10 +85,12 @@ strategy:
   buy_threshold: 65        # bu puanın üstündeki hisseler alım adayı
   sell_threshold: 35       # elimizdeki hisse bu puanın altına düşerse sat
   weights:                 # toplam 100
-    trend: 30              # EMA20 > EMA50 > EMA200, fiyat ortalamaların üstünde
-    momentum: 25           # RSI ve MACD
-    volume: 15             # hacim son 20 günün ortalamasının üstünde mi
-    news: 30               # haber/KAP duygu skoru
+    trend: 25              # EMA20 > EMA50 > EMA200, fiyat ortalamaların üstünde
+    momentum: 20           # RSI ve MACD
+    volume: 10             # hacim son 20 günün ortalamasının üstünde mi
+    news: 15               # haber/KAP duygu skoru
+    teknik: 30             # destek/direnç, trend çizgisi, Fibonacci, Bollinger, ADX, Stokastik RSI,
+                           # OBV, Ichimoku, VWAP, mum formasyonları (bot/ta.py)
   rsi_overbought: 75       # RSI bunun üstündeyse "aşırı alım", puan kırılır
 
 # ----------------- Risk yönetimi -----------------

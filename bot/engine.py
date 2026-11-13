@@ -42,6 +42,7 @@ class Engine:
         self.close_check = None                        # dışarıdan kapanış saati kuralı
         self.buy_window = None                         # dışarıdan alım saatleri kuralı
         self.range_df_fn = self.daily_fn               # günlük oynaklık için tablo
+        self.intraday_fn = None                        # gün içi 15 dk mumlar (teknik analiz)
 
     # ======================================================== yardımcılar
     def _tick(self, price: float) -> float:
@@ -134,6 +135,43 @@ class Engine:
         stop = math.floor(price * (1 - sp / 100) / t) * t
         return self._round(stop), self._round(target), tp
 
+    def send_chart(self, symbol: str, entry=None, t1=None, t2=None, stop=None, note: str = "",
+                   caption: str = "") -> bool:
+        """Grafiği çizip Telegram'a gönder. Hata olursa sessizce geç."""
+        try:
+            from . import chart
+
+            df, tf = None, ""
+            if self.intraday_fn:
+                df, tf = self.intraday_fn(symbol), "15 dk"
+            if df is None or len(df) < 30:
+                df, tf = self.daily_fn(symbol), ("1 saat" if self.kripto else "günlük")
+            png = chart.render(symbol, df, tf, entry=entry, t1=t1, t2=t2, stop=stop, note=note)
+            if png:
+                self.tg.send_photo(png, caption)
+                return True
+        except Exception as e:
+            log.warning("Grafik hatası %s: %s", symbol, e)
+        return False
+
+    def ta_adjust(self, sc, price: float, stop: float, t1: float, t2: float):
+        """Grafiğe göre düzelt: hedeften önce direnç varsa ele; 2. hedefi direncin hemen altına,
+        zarar kesi desteğin hemen altına koy (makul aralıktaysa)."""
+        t = getattr(sc, "ta", None)
+        if not t:
+            return stop, t1, t2, None
+        r, sp = t.resistance, t.support
+        if r and price < r < t1 * 0.999 and t.resistance_hits >= 2:
+            return stop, t1, t2, f"1. hedeften ({t1:.2f}) önce güçlü direnç var ({r:.2f})"
+        if r and t1 < r < t2:
+            t2 = max(t1, self._round(r * 0.998))
+        if sp and sp < price:
+            s_stop = self._round(sp * 0.997)
+            d0, d1 = price - stop, price - s_stop
+            if 0.6 * d0 <= d1 <= 1.3 * d0:
+                stop = s_stop
+        return stop, t1, t2, None
+
     def stretch_target(self, symbol: str, price: float, t1: float) -> float:
         """2. hedef: hisse güçlüyse buraya kadar bekletilir (en fazla %3, hissenin günlük oynaklığına göre)."""
         g = self.cfg.raw.get("gunici", {})
@@ -177,7 +215,13 @@ class Engine:
         out: list[Score] = []
         for sym in (symbols if symbols is not None else self.cfg.universe):
             df = self.daily_fn(sym)
-            sc = score_symbol(sym, df, self.news_scores.get(sym, 0.0), self.cfg.strategy)
+            intra = None
+            if self.intraday_fn and self.cfg.strategy["weights"].get("teknik"):
+                try:
+                    intra = self.intraday_fn(sym)
+                except Exception:
+                    intra = None
+            sc = score_symbol(sym, df, self.news_scores.get(sym, 0.0), self.cfg.strategy, intraday=intra)
             if sc:
                 self.scores[sym] = sc
                 out.append(sc)
@@ -262,6 +306,10 @@ class Engine:
                 if not self.reachable(sc.symbol, tp):
                     return f"{sc.symbol}: günlük hareketi hedef için yetersiz"
                 t2 = self.stretch_target(sc.symbol, sc.price, target)
+                stop, target, t2, why = self.ta_adjust(sc, sc.price, stop, target, t2)
+                if why:
+                    log.info("%s elendi: %s", sc.symbol, why)
+                    return f"{sc.symbol}: {why}"
                 self.db.set(self._t1_key(sc.symbol), target)
                 self.db.set(f"locked:{sc.symbol}", False)
                 plan = Plan(qty, stop, t2, round(qty * sc.price, 2))
@@ -273,6 +321,9 @@ class Engine:
         reason = f"Puan {sc.total:.0f} — {'; '.join(sc.notes) or sc.summary()}"
         res = self.broker.buy(sc.symbol, plan.qty, sc.price, plan.stop, plan.target, reason)
         self._signals_this_check += 1
+        t1v = self.db.get(self._t1_key(sc.symbol)) if self.daytrade else None
+        if res.status in ("FILLED", "PENDING"):
+            self.send_chart(sc.symbol, sc.price, t1v, plan.target, plan.stop, note=f"Puan {sc.total:.0f}")
         if res.status == "FILLED":
             self.record_fill("BUY", sc.symbol, res.qty, res.price, plan.stop, plan.target, reason)
             self.tg.send(self._buy_text(sc, plan, res.price, filled=True))
@@ -609,8 +660,8 @@ class Engine:
             elif "limit" in msg or "durduruldu" in msg or "Maksimum" in msg:
                 break
         if buys and sent == 0:
-            self.tg.send("📌 Eşiği geçenler var ama hiçbirinin günlük hareketi hedef için yeterli değil "
-                         "(ya da bakiye yetmiyor). Şimdilik alım yok, fırsat çıkarsa yazarım.")
+            self.tg.send("📌 Eşiği geçenler var ama grafikte hedefin önünde direnç var ya da günlük hareketi "
+                         "hedef için yetersiz. Şimdilik alım yok, fırsat çıkarsa yazarım.")
 
     def intraday(self, allow_buys: bool = True) -> None:
         self._signals_this_check = 0
@@ -785,6 +836,19 @@ class Engine:
                f"Miktar: <b>{self.qs(plan.qty)}</b> | Fiyat: <b>{tl(price)}</b> | Tutar: {tl(plan.qty * price)}\n"
                + self.levels_text(sc.symbol, price, plan.qty, plan.stop, plan.target) +
                f"Puan: {sc.total:.0f}/100 ({sc.summary()})")
+        t = getattr(sc, "ta", None)
+        if t:
+            bits = []
+            if t.support:
+                bits.append(f"Destek {tl(t.support)}")
+            if t.resistance:
+                bits.append(f"Direnç {tl(t.resistance)}")
+            if t.trend_line:
+                bits.append(f"Trend çizgisi {tl(t.trend_line)}")
+            if t.fib:
+                bits.append(f"Fibo %61,8 {tl(t.fib['61.8'])}")
+            if bits:
+                txt += "\n📐 " + " | ".join(bits)
         if sc.notes:
             txt += "\n• " + "\n• ".join(escape(n) for n in sc.notes)
         if self.daytrade:

@@ -119,6 +119,13 @@ def restart_self() -> None:
     log.info("Yeniden başlatma isteği: %s", r.status_code)
 
 
+def _tr(df):
+    if df is not None and len(df):
+        df = df.copy()
+        df.index = df.index.tz_convert("Europe/Istanbul")
+    return df
+
+
 def _closed(df):
     """Son (henüz kapanmamış) saatlik mumu at."""
     return df.iloc[:-1] if df is not None and len(df) > 61 else df
@@ -142,6 +149,8 @@ def setup():
             return t >= at(t, "12:20")
         return t >= at(t, cfg.raw.get("gunici", {}).get("close_at", "17:30"))
     eng.close_check = bist_close_check
+    from bot import data as bist_data
+    eng.intraday_fn = bist_data.intraday
 
     # ---- kripto motoru
     kcfg = load_config(ROOT / "kripto.yaml")
@@ -151,6 +160,7 @@ def setup():
                   daily_fn=lambda s: _closed(crypto_data.candles(s, "1h", 300)),
                   prices_fn=crypto_data.last_prices)
     keng.range_df_fn = lambda s: crypto_data.candles(s, "1d", 40, cache_sec=3600)
+    keng.intraday_fn = lambda s: _tr(crypto_data.candles(s, "15m", 300))
     keng.close_check = lambda: crypto_force_close(cfg, kcfg, now())
     keng.buy_window = lambda: crypto_buy_window(cfg, kcfg, now())
 
@@ -191,6 +201,14 @@ def setup():
                 f"positions={kdb.positions()}\npendings={kdb.open_pendings()}\n"
                 f"cash={keng.cash()} trades_today={len(kdb.trades_today())} last_rescan={kdb.get('last_rescan')}")
 
+    bist_grafik = tg.commands["grafik"]
+
+    @tg.command("grafik")
+    def _g(args):
+        if args and args[0].upper() in kcfg.universe:
+            return dummy.commands["grafik"](args)
+        return bist_grafik(args)
+
     @tg.command("kriptoislemler")
     def _kt(args):
         return dummy.commands["islemler"]([])
@@ -198,6 +216,8 @@ def setup():
     def route(text: str):
         q = parse(text, cfg.universe + kcfg.universe)
         sym = q["symbol"]
+        if sym and any(w in text.lower() for w in ("grafik", "chart", "çizgi", "cizgi")):
+            return tg.commands["grafik"]([sym])
         if sym in kcfg.universe:
             return kr_text(text)
         if sym in cfg.universe:
@@ -233,7 +253,7 @@ def crypto_scan_text(keng, kcfg) -> str:
         live = px.get(sc.symbol, sc.price)
         mark = "🟢" if sc.total >= th else "⚪"
         lines.append(f"{mark} <b>{sc.symbol}</b> {sc.total:.0f} puan — {tl(live)} | 24s {chg:+.1f}% | günlük oynaklık %{rng:.1f}"
-                     + (f"\n    └ {escape('; '.join(sc.notes[:2])).replace('20 günlük', '20 saatlik')}" if sc.notes else ""))
+                     + (f"\n    └ {escape('; '.join(sc.notes[:2]))}" if sc.notes else ""))
         if best is None and sc.total >= th:
             best = (sc, live, rng)
     cash = keng.cash() if keng.cash() >= 100 else 48000.0
@@ -339,8 +359,7 @@ def main() -> None:
         amount = float(os.getenv("NAKIT").replace(".", "").replace(",", "."))
         db.set("cash", amount)
         db.set(eng._day_key(), amount)
-    if os.getenv("MESAJ", "").strip():
-        m = os.getenv("MESAJ").strip()
+    for m in [x.strip() for x in os.getenv("MESAJ", "").split(";;") if x.strip()]:
         if m.startswith("/"):
             fn = tg.commands.get(m[1:].split()[0].lower())
             reply = fn(m.split()[1:]) if fn else None

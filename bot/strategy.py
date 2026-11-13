@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from . import ta as tamod
 from .indicators import add_all
 
 
@@ -23,18 +24,25 @@ class Score:
     atr: float
     parts: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    ta: object = None
 
     def summary(self) -> str:
         p = self.parts
-        return (f"Trend {p.get('trend', 0):.0f} | Momentum {p.get('momentum', 0):.0f} | "
-                f"Hacim {p.get('volume', 0):.0f} | Haber {p.get('news', 0):.0f}")
+        txt = (f"Trend {p.get('trend', 0):.0f} | Momentum {p.get('momentum', 0):.0f} | "
+               f"Hacim {p.get('volume', 0):.0f}")
+        if "teknik" in p:
+            txt += f" | Teknik {p['teknik']:.0f}"
+        if p.get("news"):
+            txt += f" | Haber {p['news']:.0f}"
+        return txt
 
 
 def _clip01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def score_symbol(symbol: str, df: pd.DataFrame, news_score: float, cfg: dict) -> Score | None:
+def score_symbol(symbol: str, df: pd.DataFrame, news_score: float, cfg: dict,
+                 intraday: pd.DataFrame | None = None) -> Score | None:
     if df is None or len(df) < 60:
         return None
     d = add_all(df)
@@ -52,7 +60,7 @@ def score_symbol(symbol: str, df: pd.DataFrame, news_score: float, cfg: dict) ->
     trend = sum(conds) / len(conds)
     if last.Close >= last.HIGH20 * 0.995:
         trend = min(1.0, trend + 0.15)
-        notes.append("20 günlük zirveye yakın/kırılım")
+        notes.append("Son 20 mumun zirvesine yakın/kırılım")
     if conds[1] and not (prev.EMA20 > prev.EMA50):
         notes.append("EMA20 EMA50'yi yukarı kesti")
 
@@ -93,15 +101,22 @@ def score_symbol(symbol: str, df: pd.DataFrame, news_score: float, cfg: dict) ->
         "trend": trend * w["trend"],
         "momentum": momentum * w["momentum"],
         "volume": volume * w["volume"],
-        "news": news * w["news"],
+        "news": news * w.get("news", 0),
     }
+    t = None
+    if w.get("teknik"):
+        t = tamod.analyze(df, intraday)
+        parts["teknik"] = (t.score if t else 0.5) * w["teknik"]
+        if t:
+            notes.extend(t.notes[:3])
+            notes.extend("⚠️ " + x for x in t.warnings[:2])
     total = sum(parts.values())
     # Çok olumsuz haber varsa teknik ne olursa olsun alma
     if news_score <= -0.5:
         total = min(total, cfg["buy_threshold"] - 1)
         notes.append("Ağır olumsuz haber: alım engellendi")
 
-    return Score(symbol, round(total, 1), float(last.Close), float(last.ATR), parts, notes)
+    return Score(symbol, round(total, 1), float(last.Close), float(last.ATR), parts, notes, ta=t)
 
 
 def market_ok(index_df: pd.DataFrame | None) -> bool:
